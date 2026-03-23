@@ -49,6 +49,12 @@ import {
 	BOARD_NOTE_MIN_WIDTH,
 	snapBoardNoteWidth,
 } from "./board-note-config";
+import {
+	clearBoardColumnDrag,
+	getBoardColumnDragState,
+	startBoardColumnDrag,
+	useBoardColumnDragState,
+} from "./board-column-drag-state";
 
 export type BoardNoteShape = Extract<TLShape, { type: "board-note" }>;
 
@@ -203,6 +209,53 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 		return getBoardNoteSizeAdjustments(this.editor, next);
 	}
 
+	override onTranslateStart(shape: BoardNoteShape) {
+		const selectedShapeIds = this.editor.getSelectedShapeIds();
+		if (selectedShapeIds.length !== 1 || selectedShapeIds[0] !== shape.id) {
+			clearBoardColumnDrag(shape.id);
+			return;
+		}
+
+		const parent = this.editor.getShape(shape.parentId);
+		const sourceColumnId = parent?.type === "board-column" ? parent.id : null;
+		startBoardColumnDrag(
+			shape.id,
+			sourceColumnId,
+			shape.index,
+			shape.y,
+			shape.props.h,
+		);
+
+		if (sourceColumnId) {
+			this.editor.updateShape({
+				id: shape.id,
+				type: shape.type,
+				index: this.editor.getHighestIndexForParent(sourceColumnId),
+			});
+		}
+	}
+
+	override onTranslateEnd(shape: BoardNoteShape) {
+		clearBoardColumnDrag(shape.id);
+	}
+
+	override onTranslateCancel(shape: BoardNoteShape) {
+		const dragState = getBoardColumnDragState();
+		if (
+			dragState.draggedShapeId === shape.id &&
+			dragState.sourceColumnId === shape.parentId &&
+			dragState.sourceIndex
+		) {
+			this.editor.updateShape({
+				id: shape.id,
+				type: shape.type,
+				index: dragState.sourceIndex,
+			});
+		}
+
+		clearBoardColumnDrag(shape.id);
+	}
+
 	override indicator(shape: BoardNoteShape) {
 		return (
 			<rect
@@ -216,6 +269,19 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 	const editor = useEditor();
 	const isEditing = useIsEditing(shape.id);
+	const dragState = useBoardColumnDragState();
+	const parentColumn = useValue(
+		"board-note-parent-column",
+		() => {
+			const parent = editor.getShape(shape.parentId);
+			return parent?.type === "board-column" ? parent : null;
+		},
+		[editor, shape.parentId],
+	);
+	const isInColumn = Boolean(parentColumn);
+	const isInCollapsedColumn = Boolean(parentColumn?.props.collapsed);
+	const isDraggedBoardColumnNote =
+		dragState.draggedShapeId === shape.id && editor.isIn("select.translating");
 	const isDarkMode = useValue(
 		"board-note-dark-mode",
 		() => editor.user.getIsDarkMode(),
@@ -237,8 +303,9 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 				shape.props.color,
 				shape.props.fill,
 				isDarkMode,
+				{ inColumn: isInColumn },
 			),
-		[isDarkMode, shape.props.color, shape.props.fill],
+		[isDarkMode, isInColumn, shape.props.color, shape.props.fill],
 	);
 	const topBarStyles = useMemo(
 		() => getBoardNoteBarStyles(shape.props.topBarColor, isDarkMode),
@@ -261,15 +328,23 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 	return (
 		<HTMLContainer
 			className="boardspace-note-shape"
+			data-in-column={isInColumn ? "true" : "false"}
+			data-dragging={isDraggedBoardColumnNote ? "true" : "false"}
 			style={{
 				height: shape.props.h,
+				opacity: isInCollapsedColumn ? 0 : isDraggedBoardColumnNote ? 0.8 : 1,
+				pointerEvents: isInCollapsedColumn ? "none" : "all",
+				position: "relative",
+				visibility: isInCollapsedColumn ? "hidden" : "visible",
 				width: shape.props.w,
+				zIndex: isDraggedBoardColumnNote ? 10 : undefined,
 			}}
 			onDoubleClick={() => editor.setEditingShape(shape.id)}
 		>
 			<div
 				className="boardspace-note-shape__inner"
 				data-editing={isEditing ? "true" : "false"}
+				data-in-column={isInColumn ? "true" : "false"}
 				style={cardStyles}
 			>
 				{shape.props.topBarEnabled ? (
@@ -310,10 +385,11 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 	);
 }
 
-function getBoardNoteCardStyles(
+export function getBoardNoteCardStyles(
 	color: TLDefaultColorStyle,
 	fill: TLDefaultFillStyle,
 	isDarkMode: boolean,
+	options?: { inColumn?: boolean },
 ) : CSSProperties {
 	const theme = getDefaultColorTheme({ isDarkMode });
 	const patternColor = getColorValue(theme, color, "pattern");
@@ -337,11 +413,15 @@ function getBoardNoteCardStyles(
 				: fill === "lined-fill"
 					? "100% 12px"
 					: undefined,
+		border: "0",
+		boxShadow: options?.inColumn
+			? "inset 0 0 0 1px rgba(255, 255, 255, 0.15)"
+			: undefined,
 		"--boardspace-note-placeholder-color": "var(--text-faint)",
 	} as CSSProperties;
 }
 
-function getBoardNoteTextColor(
+export function getBoardNoteTextColor(
 	color: TLDefaultColorStyle,
 	isDarkMode: boolean,
 ) {
@@ -357,7 +437,7 @@ function shouldSnapBoardNoteWidth(info: TLResizeInfo<BoardNoteShape>) {
 	);
 }
 
-function getBoardNoteBarStyles(
+export function getBoardNoteBarStyles(
 	color: TLDefaultColorStyle,
 	isDarkMode: boolean,
 ): CSSProperties {
@@ -388,7 +468,7 @@ function getBoardNoteSizeAdjustments(
 	};
 }
 
-function getBoardNoteMeasuredHeight(editor: Editor, shape: BoardNoteShape) {
+export function getBoardNoteMeasuredHeight(editor: Editor, shape: BoardNoteShape) {
 	const fontSize = LABEL_FONT_SIZES[shape.props.size];
 	const minTextHeight = Math.ceil(fontSize * TEXT_PROPS.lineHeight);
 	const availableWidth = Math.max(

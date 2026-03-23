@@ -26,10 +26,12 @@ import {
 	StylePanelSizePicker,
 	StylePanelSplinePicker,
 	StylePanelTextAlignPicker,
-	DefaultToolbar,
 	DefaultZoomMenu,
 	Editor,
 	SelectTool,
+	TLParentId,
+	TLShape,
+	TLShapePartial,
 	TLEditorSnapshot,
 	TLComponents,
 	TldrawUiButtonIcon,
@@ -52,11 +54,23 @@ import {
 	useValue,
 } from "tldraw";
 import {
+	BoardColumnShape,
+	BoardColumnShapeUtil,
+} from "./board-column-shape";
+import { BoardColumnTool } from "./board-column-tool";
+import {
+	getAffectedBoardColumnIdsForShapeChange,
+	getBoardColumnReorderUpdates,
+	getBoardColumnLayoutResult,
+	getBoardColumnVisualOrder,
+} from "./board-column-layout";
+import {
 	BoardNoteShape,
 	BoardNoteTopBarColorStyle,
 } from "./board-note-shape";
 import { BoardNoteTool } from "./board-note-tool";
 import { BoardNoteShapeUtil } from "./board-note-shape";
+import { BoardspaceToolbar } from "./boardspace-toolbar";
 import {
 	preventTldrawCanvasesCausingObsidianGestures,
 	replaceCanvasDoubleClickWithBoardNote,
@@ -94,14 +108,14 @@ const BOARDSPACE_COMPONENTS: TLComponents = {
 	StylePanel: BoardspaceStylePanel,
 	Toasts: null,
 	TopPanel: null,
+	Toolbar: BoardspaceToolbar,
 	VideoToolbar: null,
 	ZoomMenu: DefaultZoomMenu,
-	Toolbar: DefaultToolbar,
 };
 
 const BOARDSPACE_OVERRIDES: TLUiOverrides = {
-	tools(_editor, tools) {
-		return pickBoardspaceTools(tools);
+	tools(editor, tools) {
+		return pickBoardspaceTools(editor, tools);
 	},
 };
 
@@ -112,8 +126,9 @@ const BOARDSPACE_TOOLS = [
 	ArrowShapeTool,
 	EraserTool,
 	BoardNoteTool,
+	BoardColumnTool,
 ] as const;
-const BOARDSPACE_SHAPES = [BoardNoteShapeUtil] as const;
+const BOARDSPACE_SHAPES = [BoardNoteShapeUtil, BoardColumnShapeUtil] as const;
 const BOARDSPACE_OPTIONS = {
 	actionShortcutsLocation: "menu",
 	createTextOnCanvasDoubleClick: false,
@@ -150,6 +165,7 @@ export function BoardspaceEditor({
 			preventTldrawCanvasesCausingObsidianGestures(editor);
 		const cleanupDoubleClick =
 			replaceCanvasDoubleClickWithBoardNote(editor);
+		const cleanupColumnLayout = registerBoardColumnAutoLayout(editor);
 		const removeSnapshotListener = editor.store.listen(
 			() => {
 				onSnapshotChange?.(editor.getSnapshot());
@@ -161,6 +177,7 @@ export function BoardspaceEditor({
 			stopWatchingTheme();
 			cleanupGestures?.();
 			cleanupDoubleClick?.();
+			cleanupColumnLayout?.();
 			removeSnapshotListener();
 		};
 	};
@@ -183,7 +200,10 @@ export function BoardspaceEditor({
 	);
 }
 
-function pickBoardspaceTools(tools: TLUiToolsContextType): TLUiToolsContextType {
+function pickBoardspaceTools(
+	editor: Editor,
+	tools: TLUiToolsContextType,
+): TLUiToolsContextType {
 	const nextTools: TLUiToolsContextType = {};
 
 	if (tools.hand) {
@@ -210,6 +230,16 @@ function pickBoardspaceTools(tools: TLUiToolsContextType): TLUiToolsContextType 
 		nextTools.note = tools.note;
 	}
 
+	nextTools.column = {
+		id: "column",
+		icon: <ColumnToolIcon />,
+		kbd: "c",
+		label: "Column",
+		onSelect() {
+			editor.setCurrentTool("column");
+		},
+	};
+
 	return nextTools;
 }
 
@@ -225,6 +255,213 @@ function normalizeToSinglePage(editor: Editor) {
 	editor.setCurrentPage(currentPageId);
 }
 
+function registerBoardColumnAutoLayout(editor: Editor) {
+	const pendingColumnIds = new Set<BoardColumnShape["id"]>();
+	let isNormalizing = false;
+
+	const queueColumnId = (columnId: TLParentId) => {
+		const shape = editor.getShape(columnId);
+		if (shape?.type === "board-column") {
+			pendingColumnIds.add(shape.id);
+		}
+	};
+
+	const removeAfterCreateHandler = editor.sideEffects.registerAfterCreateHandler(
+		"shape",
+		(shape) => {
+			if (isNormalizing) {
+				return;
+			}
+
+			if (shape.type === "board-column") {
+				pendingColumnIds.add(shape.id);
+			}
+		},
+	);
+	const removeAfterChangeHandler = editor.sideEffects.registerAfterChangeHandler(
+		"shape",
+		(from, to) => {
+			if (isNormalizing) {
+				return;
+			}
+
+			for (const columnId of getAffectedBoardColumnIdsForShapeChange(editor, from, to)) {
+				queueColumnId(columnId);
+			}
+		},
+	);
+	const removeAfterDeleteHandler = editor.sideEffects.registerAfterDeleteHandler(
+		"shape",
+		(shape) => {
+			if (isNormalizing) {
+				return;
+			}
+
+			queueColumnId(shape.parentId);
+		},
+	);
+	const removeOperationCompleteHandler =
+		editor.sideEffects.registerOperationCompleteHandler(() => {
+			if (isNormalizing) {
+				return;
+			}
+
+			if (editor.isIn("select.translating")) {
+				return;
+			}
+
+			if (pendingColumnIds.size === 0) {
+				return;
+			}
+
+			const nextColumnIds = Array.from(pendingColumnIds);
+			pendingColumnIds.clear();
+			isNormalizing = true;
+
+			try {
+				normalizeBoardColumns(editor, nextColumnIds);
+			} finally {
+				isNormalizing = false;
+			}
+		});
+
+	normalizeBoardColumns(
+		editor,
+		editor
+			.getCurrentPageShapes()
+			.filter((shape): shape is BoardColumnShape => shape.type === "board-column")
+			.map((shape) => shape.id),
+	);
+
+	return () => {
+		removeAfterCreateHandler?.();
+		removeAfterChangeHandler?.();
+		removeAfterDeleteHandler?.();
+		removeOperationCompleteHandler?.();
+	};
+}
+
+function normalizeBoardColumns(editor: Editor, columnIds: BoardColumnShape["id"][]) {
+	const updates: TLShapePartial[] = [];
+
+	for (const columnId of columnIds) {
+		const shape = editor.getShape(columnId);
+		if (!shape || shape.type !== "board-column") {
+			continue;
+		}
+
+		const orderedChildren = getBoardColumnVisualOrder(editor, shape.id);
+		const reorderUpdates = getBoardColumnReorderUpdates(
+			editor,
+			shape.id,
+			orderedChildren,
+		);
+
+		for (const reorderUpdate of reorderUpdates) {
+			if (!hasMeaningfulShapeChange(editor, reorderUpdate)) {
+				continue;
+			}
+
+			updates.push(reorderUpdate);
+		}
+
+		const { columnHeight, updates: childUpdates } = getBoardColumnLayoutResult(
+			editor,
+			shape.id,
+			shape.props.w,
+			shape.props.size,
+			shape.props.minH,
+			orderedChildren,
+		);
+
+		for (const childUpdate of childUpdates) {
+			if (!hasMeaningfulShapeChange(editor, childUpdate)) {
+				continue;
+			}
+
+			updates.push(childUpdate);
+		}
+
+		if (Math.abs(shape.props.h - columnHeight) >= 1) {
+			updates.push({
+				id: shape.id,
+				type: shape.type,
+				props: {
+					h: columnHeight,
+				},
+			});
+		}
+	}
+
+	if (updates.length === 0) {
+		return;
+	}
+
+	editor.run(() => {
+		editor.updateShapes(updates);
+	}, { history: "ignore" });
+}
+
+function hasMeaningfulShapeChange(editor: Editor, update: TLShapePartial) {
+	if (!update.id || !update.type) {
+		return false;
+	}
+
+	const currentShape = editor.getShape(update.id);
+	if (!currentShape || currentShape.type !== update.type) {
+		return false;
+	}
+
+	if (typeof update.x === "number" && Math.abs(currentShape.x - update.x) >= 1) {
+		return true;
+	}
+
+	if (typeof update.y === "number" && Math.abs(currentShape.y - update.y) >= 1) {
+		return true;
+	}
+
+	if ("index" in update && typeof update.index === "string" && currentShape.index !== update.index) {
+		return true;
+	}
+
+	if (update.props && typeof update.props === "object") {
+		for (const [key, value] of Object.entries(update.props)) {
+			const currentValue = (currentShape.props as Record<string, unknown>)[key];
+			if (typeof value === "number" && typeof currentValue === "number") {
+				if (Math.abs(currentValue - value) >= 1) {
+					return true;
+				}
+				continue;
+			}
+
+			if (currentValue !== value) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+function ColumnToolIcon() {
+	return (
+		<svg
+			viewBox="0 0 16 16"
+			aria-hidden="true"
+			fill="none"
+			stroke="currentColor"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			strokeWidth="1.2"
+		>
+			<rect x="2.2" y="2.2" width="11.6" height="11.6" rx="1.4" />
+			<path d="M4.5 5.3h7" />
+			<path d="M4.5 8h7" opacity="0.58" />
+			<path d="M4.5 10.7h7" opacity="0.58" />
+		</svg>
+	);
+}
+
 function BoardspaceStylePanel(props: TLUiStylePanelProps) {
 	return (
 		<DefaultStylePanel {...props}>
@@ -235,23 +472,26 @@ function BoardspaceStylePanel(props: TLUiStylePanelProps) {
 
 function BoardspaceStylePanelContent() {
 	const editor = useEditor();
-	const selectedNotes = useValue(
-		"selected-board-notes-style-panel",
+	const selectedStylableShapes = useValue(
+		"selected-boardspace-style-shapes",
 		() =>
 			editor
 				.getSelectedShapes()
-				.filter((shape): shape is BoardNoteShape => shape.type === "board-note"),
+				.filter(
+					(shape): shape is BoardspaceStylableShape =>
+						shape.type === "board-note" || shape.type === "board-column",
+				),
 		[editor],
 	);
 
-	if (selectedNotes.length === 0) {
+	if (selectedStylableShapes.length === 0) {
 		return <BoardspaceDefaultStylePanelContent />;
 	}
 
 	return (
 		<>
 			<StylePanelSection>
-				<BoardNoteColorSection selectedNotes={selectedNotes} />
+				<BoardspaceColorSection selectedShapes={selectedStylableShapes} />
 				<StylePanelOpacityPicker />
 			</StylePanelSection>
 			<BoardspaceDefaultStylePanelContent omitFirstSection={true} />
@@ -332,10 +572,12 @@ function BoardspaceHelperButtons() {
 	);
 }
 
-function BoardNoteColorSection({
-	selectedNotes,
+type BoardspaceStylableShape = BoardNoteShape | BoardColumnShape;
+
+function BoardspaceColorSection({
+	selectedShapes,
 }: {
-	selectedNotes: BoardNoteShape[];
+	selectedShapes: BoardspaceStylableShape[];
 }) {
 	const editor = useEditor();
 	const [colorTarget, setColorTarget] = useState<"background" | "topBar">(
@@ -343,7 +585,7 @@ function BoardNoteColorSection({
 	);
 	const { styles, onHistoryMark, onValueChange } = useStylePanelContext();
 
-	const allTopBarsEnabled = selectedNotes.every(
+	const allTopBarsEnabled = selectedShapes.every(
 		(shape) => shape.props.topBarEnabled,
 	);
 	const pickerStyle =
@@ -387,7 +629,7 @@ function BoardNoteColorSection({
 							const shouldDisableTopBar =
 								currentTarget === "topBar" && allTopBarsEnabled;
 
-							updateSelectedBoardNotes(editor, {
+							updateSelectedBoardspaceShapes(editor, {
 								topBarEnabled: shouldDisableTopBar ? false : true,
 							});
 
@@ -408,7 +650,7 @@ function BoardNoteColorSection({
 						onHistoryMark={onHistoryMark}
 						onValueChange={(value) => {
 							onValueChange(BoardNoteTopBarColorStyle, value);
-							updateSelectedBoardNotes(editor, {
+							updateSelectedBoardspaceShapes(editor, {
 								topBarEnabled: true,
 							});
 						}}
@@ -439,13 +681,13 @@ function BoardNoteColorSection({
 						onHistoryMark("clear note color");
 
 						if (colorTarget === "topBar") {
-							updateSelectedBoardNotes(editor, {
+							updateSelectedBoardspaceShapes(editor, {
 								topBarEnabled: false,
 							});
 							return;
 						}
 
-						updateSelectedBoardNotes(editor, {
+						updateSelectedBoardspaceShapes(editor, {
 							fill: "none",
 						});
 					}}
@@ -515,20 +757,23 @@ function BoardNoteTopBarColorPicker({
 	);
 }
 
-function updateSelectedBoardNotes(
+function updateSelectedBoardspaceShapes(
 	editor: Editor,
-	props: Partial<BoardNoteShape["props"]>,
+	props: Partial<BoardspaceStylableShape["props"]>,
 ) {
-	const selectedNotes = editor
+	const selectedShapes = editor
 		.getSelectedShapes()
-		.filter((shape): shape is BoardNoteShape => shape.type === "board-note");
+		.filter(
+			(shape): shape is BoardspaceStylableShape =>
+				shape.type === "board-note" || shape.type === "board-column",
+		);
 
-	if (selectedNotes.length === 0) {
+	if (selectedShapes.length === 0) {
 		return;
 	}
 
 	editor.updateShapes(
-		selectedNotes.map((shape) => ({
+		selectedShapes.map((shape) => ({
 			id: shape.id,
 			type: shape.type,
 			props,
