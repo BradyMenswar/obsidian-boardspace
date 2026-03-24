@@ -6,12 +6,14 @@ import {
 	DefaultNavigationPanel,
 	DefaultRichTextToolbar,
 	DefaultStylePanel,
+	DefaultColorStyle,
+	DefaultDashStyle,
 	DrawShapeTool,
 	EraserTool,
 	HandTool,
-	DefaultColorStyle,
 	getColorValue,
 	getDefaultColorTheme,
+	kickoutOccludedShapes,
 	StylePanelArrowheadPicker,
 	StylePanelArrowKindPicker,
 	StylePanelButtonPicker,
@@ -26,7 +28,6 @@ import {
 	StylePanelSizePicker,
 	StylePanelSplinePicker,
 	StylePanelTextAlignPicker,
-	DefaultZoomMenu,
 	Editor,
 	SelectTool,
 	TLParentId,
@@ -70,7 +71,10 @@ import {
 } from "./board-note-shape";
 import { BoardNoteTool } from "./board-note-tool";
 import { BoardNoteShapeUtil } from "./board-note-shape";
+import { BoardTodoShape, BoardTodoShapeUtil } from "./board-todo-shape";
+import { BoardTodoTool } from "./board-todo-tool";
 import { BoardspaceToolbar } from "./boardspace-toolbar";
+import { BoardspaceZoomMenu } from "./boardspace-zoom-menu";
 import {
 	preventTldrawCanvasesCausingObsidianGestures,
 	replaceCanvasDoubleClickWithBoardNote,
@@ -110,7 +114,7 @@ const BOARDSPACE_COMPONENTS: TLComponents = {
 	TopPanel: null,
 	Toolbar: BoardspaceToolbar,
 	VideoToolbar: null,
-	ZoomMenu: DefaultZoomMenu,
+	ZoomMenu: BoardspaceZoomMenu,
 };
 
 const BOARDSPACE_OVERRIDES: TLUiOverrides = {
@@ -126,9 +130,14 @@ const BOARDSPACE_TOOLS = [
 	ArrowShapeTool,
 	EraserTool,
 	BoardNoteTool,
+	BoardTodoTool,
 	BoardColumnTool,
 ] as const;
-const BOARDSPACE_SHAPES = [BoardNoteShapeUtil, BoardColumnShapeUtil] as const;
+const BOARDSPACE_SHAPES = [
+	BoardNoteShapeUtil,
+	BoardTodoShapeUtil,
+	BoardColumnShapeUtil,
+] as const;
 const BOARDSPACE_OPTIONS = {
 	actionShortcutsLocation: "menu",
 	createTextOnCanvasDoubleClick: false,
@@ -157,6 +166,7 @@ export function BoardspaceEditor({
 	const handleMount = (editor: Editor) => {
 		normalizeToSinglePage(editor);
 		syncTldrawThemeWithObsidian();
+		editor.updateInstanceState({ isGridMode: true });
 
 		const stopWatchingTheme = watchObsidianThemeChanges(
 			syncTldrawThemeWithObsidian,
@@ -229,6 +239,16 @@ function pickBoardspaceTools(
 	if (tools.note) {
 		nextTools.note = tools.note;
 	}
+
+	nextTools.todo = {
+		id: "todo",
+		icon: <TodoToolIcon />,
+		kbd: "t",
+		label: "To-do",
+		onSelect() {
+			editor.setCurrentTool("todo");
+		},
+	};
 
 	nextTools.column = {
 		id: "column",
@@ -462,6 +482,25 @@ function ColumnToolIcon() {
 	);
 }
 
+function TodoToolIcon() {
+	return (
+		<svg
+			viewBox="0 0 16 16"
+			aria-hidden="true"
+			fill="none"
+			stroke="currentColor"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			strokeWidth="1.2"
+		>
+			<rect x="2.4" y="3" width="2.6" height="2.6" rx="0.5" />
+			<path d="M6.8 4.3h6" />
+			<rect x="2.4" y="8.4" width="2.6" height="2.6" rx="0.5" />
+			<path d="M6.8 9.7h6" />
+		</svg>
+	);
+}
+
 function BoardspaceStylePanel(props: TLUiStylePanelProps) {
 	return (
 		<DefaultStylePanel {...props}>
@@ -479,7 +518,9 @@ function BoardspaceStylePanelContent() {
 				.getSelectedShapes()
 				.filter(
 					(shape): shape is BoardspaceStylableShape =>
-						shape.type === "board-note" || shape.type === "board-column",
+						shape.type === "board-note" ||
+						shape.type === "board-column" ||
+						shape.type === "board-todo",
 				),
 		[editor],
 	);
@@ -494,15 +535,20 @@ function BoardspaceStylePanelContent() {
 				<BoardspaceColorSection selectedShapes={selectedStylableShapes} />
 				<StylePanelOpacityPicker />
 			</StylePanelSection>
-			<BoardspaceDefaultStylePanelContent omitFirstSection={true} />
+			<BoardspaceDefaultStylePanelContent
+				omitFirstSection={true}
+				useBoardspaceDashPicker={true}
+			/>
 		</>
 	);
 }
 
 function BoardspaceDefaultStylePanelContent({
 	omitFirstSection = false,
+	useBoardspaceDashPicker = false,
 }: {
 	omitFirstSection?: boolean;
+	useBoardspaceDashPicker?: boolean;
 }) {
 	return (
 		<>
@@ -514,7 +560,7 @@ function BoardspaceDefaultStylePanelContent({
 			)}
 			<StylePanelSection>
 				<StylePanelFillPicker />
-				<StylePanelDashPicker />
+				{useBoardspaceDashPicker ? <BoardspaceDashPicker /> : <StylePanelDashPicker />}
 				<StylePanelSizePicker />
 			</StylePanelSection>
 			<StylePanelSection>
@@ -529,6 +575,68 @@ function BoardspaceDefaultStylePanelContent({
 				<StylePanelSplinePicker />
 			</StylePanelSection>
 		</>
+	);
+}
+
+function BoardspaceDashPicker() {
+	const editor = useEditor();
+	const { styles, onHistoryMark, onValueChange } = useStylePanelContext();
+	const dash = styles.get(DefaultDashStyle);
+
+	if (!dash) {
+		return null;
+	}
+
+	const items = [
+		{ value: "draw", icon: "dash-draw", label: "No border" },
+		{ value: "dashed", icon: "dash-dashed", label: "Dashed border" },
+		{ value: "dotted", icon: "dash-dotted", label: "Dotted border" },
+		{ value: "solid", icon: "dash-solid", label: "Solid border" },
+	] as const;
+
+	const sharedValue = dash.type === "shared" ? dash.value : null;
+
+	return (
+		<TldrawUiToolbar label="Border style">
+			<TldrawUiToolbarToggleGroup
+				data-testid="style.dash"
+				type="single"
+				value={sharedValue}
+				asChild
+			>
+				<TldrawUiGrid>
+					{items.map((item) => {
+						const isActive = dash.type === "shared" && dash.value === item.value;
+
+						return (
+							<TldrawUiToolbarToggleItem
+								type="icon"
+								key={item.value}
+								value={item.value}
+								data-testid={`style.dash.${item.value}`}
+								aria-label={item.label}
+								title={item.label}
+								data-state={isActive ? "on" : "off"}
+								data-isactive={isActive}
+								onPointerDown={() => {
+									onHistoryMark("set border style");
+									onValueChange(DefaultDashStyle, item.value);
+								}}
+								onClick={() => {
+									onValueChange(DefaultDashStyle, item.value);
+									const selectedShapeIds = editor.getSelectedShapeIds();
+									if (selectedShapeIds.length > 0) {
+										kickoutOccludedShapes(editor, selectedShapeIds);
+									}
+								}}
+							>
+								<TldrawUiButtonIcon icon={item.icon} />
+							</TldrawUiToolbarToggleItem>
+						);
+					})}
+				</TldrawUiGrid>
+			</TldrawUiToolbarToggleGroup>
+		</TldrawUiToolbar>
 	);
 }
 
@@ -572,7 +680,7 @@ function BoardspaceHelperButtons() {
 	);
 }
 
-type BoardspaceStylableShape = BoardNoteShape | BoardColumnShape;
+type BoardspaceStylableShape = BoardNoteShape | BoardColumnShape | BoardTodoShape;
 
 function BoardspaceColorSection({
 	selectedShapes,
@@ -765,7 +873,9 @@ function updateSelectedBoardspaceShapes(
 		.getSelectedShapes()
 		.filter(
 			(shape): shape is BoardspaceStylableShape =>
-				shape.type === "board-note" || shape.type === "board-column",
+				shape.type === "board-note" ||
+				shape.type === "board-column" ||
+				shape.type === "board-todo",
 		);
 
 	if (selectedShapes.length === 0) {

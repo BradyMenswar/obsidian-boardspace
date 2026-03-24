@@ -17,12 +17,23 @@
 }
 
 .boardspace-editor {
+	--tl-color-background: color-mix(
+		in srgb,
+		var(--background-primary) 88%,
+		white 12%
+	);
+	--tl-color-grid: rgba(255, 255, 255, 0.18);
 	height: 100%;
 	width: 100%;
 	min-height: 0;
 	overflow: hidden;
 	position: relative;
-	background: var(--background-primary);
+	background: var(--tl-color-background);
+}
+
+.theme-light .boardspace-editor {
+	--tl-color-background: var(--background-primary);
+	--tl-color-grid: rgba(0, 0, 0, 0.12);
 }
 
 .boardspace-editor .tl-container,
@@ -41,6 +52,26 @@
 .boardspace-editor .boardspace-style-panel__target-button:active,
 .boardspace-editor .boardspace-style-panel__target-button:focus,
 .boardspace-editor .boardspace-style-panel__target-button:focus-visible,
+.boardspace-editor .boardspace-todo-shape__checkbox,
+.boardspace-editor .boardspace-todo-shape__checkbox:hover,
+.boardspace-editor .boardspace-todo-shape__checkbox:active,
+.boardspace-editor .boardspace-todo-shape__checkbox:focus,
+.boardspace-editor .boardspace-todo-shape__checkbox:focus-visible,
+.boardspace-editor .boardspace-todo-shape__drag-handle,
+.boardspace-editor .boardspace-todo-shape__drag-handle:hover,
+.boardspace-editor .boardspace-todo-shape__drag-handle:active,
+.boardspace-editor .boardspace-todo-shape__drag-handle:focus,
+.boardspace-editor .boardspace-todo-shape__drag-handle:focus-visible,
+.boardspace-editor .boardspace-todo-shape__title-button,
+.boardspace-editor .boardspace-todo-shape__title-button:hover,
+.boardspace-editor .boardspace-todo-shape__title-button:active,
+.boardspace-editor .boardspace-todo-shape__title-button:focus,
+.boardspace-editor .boardspace-todo-shape__title-button:focus-visible,
+.boardspace-editor .boardspace-todo-shape__title-placeholder,
+.boardspace-editor .boardspace-todo-shape__title-placeholder:hover,
+.boardspace-editor .boardspace-todo-shape__title-placeholder:active,
+.boardspace-editor .boardspace-todo-shape__title-placeholder:focus,
+.boardspace-editor .boardspace-todo-shape__title-placeholder:focus-visible,
 .boardspace-editor .boardspace-column-shape__collapse,
 .boardspace-editor .boardspace-column-shape__collapse:hover,
 .boardspace-editor .boardspace-column-shape__collapse:active,
@@ -52,6 +83,22 @@
 	background-color: transparent;
 	border: 0;
 	box-shadow: none;
+}
+
+.boardspace-editor .boardspace-todo-shape__title-input,
+.boardspace-editor .boardspace-todo-shape__title-input:hover,
+.boardspace-editor .boardspace-todo-shape__title-input:focus,
+.boardspace-editor .boardspace-todo-shape__task-input,
+.boardspace-editor .boardspace-todo-shape__task-input:hover,
+.boardspace-editor .boardspace-todo-shape__task-input:focus {
+	appearance: none;
+	-webkit-appearance: none;
+	background: transparent;
+	background-color: transparent;
+	border: 0;
+	box-shadow: none;
+	font: inherit;
+	outline: none;
 }
 
 .boardspace-editor .boardspace-helper-buttons {
@@ -69,7 +116,7 @@
 	box-shadow:
 		0 1px 2px rgba(0, 0, 0, 0.08),
 		0 10px 24px rgba(0, 0, 0, 0.08);
-	overflow: hidden;
+	overflow: visible;
 }
 
 .boardspace-note-shape[data-in-column="true"] {
@@ -83,6 +130,7 @@
 	position: relative;
 	padding: 1rem;
 	border: 0;
+	overflow: hidden;
 }
 
 .boardspace-note-shape__text-shell,
@@ -121,6 +169,209 @@
 	left: 0;
 	right: 0;
 	height: 4px;
+}
+
+.boardspace-todo-shape {
+	pointer-events: all;
+	overflow: visible;
+}
+
+.boardspace-todo-shape__inner {
+	box-sizing: border-box;
+	width: 100%;
+	min-height: 100%;
+	position: relative;
+	padding:
+		calc(var(--boardspace-todo-padding-y, 14px) + 4px)
+		var(--boardspace-todo-padding-x, 14px)
+		var(--boardspace-todo-padding-y, 14px);
+	border: 0;
+	overflow: hidden;
+}
+
+.boardspace-todo-shape__top-bar {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 4px;
+	background: transparent;
+}
+
+.boardspace-todo-shape__top-bar[data-enabled="false"] {
+	background: transparent;
+}
+
+.boardspace-todo-shape__title-row {
+	display: flex;
+	align-items: center;
+}
+
+.boardspace-todo-shape__title-button,
+.boardspace-todo-shape__title-input,
+.boardspace-todo-shape__title-placeholder {
+	width: 100%;
+	min-width: 0;
+	padding: 0;
+	margin: 0;
+	text-align: left;
+	font-family: var(--tl-font-sans);
+	font-weight: 600;
+	line-height: 1.3;
+	color: var(--text-normal);
+}
+
+.boardspace-todo-shape__title-button {
+	cursor: text;
+}
+
+.boardspace-todo-shape__title-placeholder {
+	color: var(--text-faint);
+	cursor: text;
+	opacity: 0.7;
+}
+
+.boardspace-todo-shape__task-list {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: var(--boardspace-todo-row-gap, 6px);
+}
+
+.boardspace-todo-shape__task-row,
+.boardspace-todo-shape__task-placeholder {
+	min-height: var(--boardspace-todo-row-height, 28px);
+}
+
+.boardspace-todo-shape__task-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+}
+
+.boardspace-todo-shape__task-row[data-checked="true"] .boardspace-todo-shape__task-input {
+	opacity: 0.7;
+	text-decoration: line-through;
+}
+
+.boardspace-editor .boardspace-todo-shape__checkbox {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--boardspace-todo-checkbox-size, 16px);
+	height: var(--boardspace-todo-checkbox-size, 16px);
+	padding: 0;
+	border: 1px solid rgba(255, 255, 255, 0.65);
+	border-radius: 4px;
+	background: rgba(255, 255, 255, 0.03);
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+	color: rgba(255, 255, 255, 0.92);
+	cursor: pointer;
+	pointer-events: all;
+}
+
+.boardspace-todo-shape__checkbox-mark {
+	font-size: calc(var(--boardspace-todo-checkbox-size, 16px) * 0.7);
+	line-height: 1;
+}
+
+.boardspace-todo-shape__task-input,
+.boardspace-todo-shape__task-input--drag-preview {
+	flex: 1 1 auto;
+	min-width: 0;
+	padding: 0;
+	color: var(--text-normal);
+	line-height: 1.35;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.boardspace-editor .boardspace-todo-shape__task-input {
+	pointer-events: all;
+	display: block;
+	height: auto;
+	min-height: var(--boardspace-todo-row-height, 28px);
+	overflow: hidden;
+	resize: none;
+}
+
+.boardspace-todo-shape__task-input::placeholder {
+	color: var(--text-faint);
+	opacity: 0.78;
+}
+
+.boardspace-editor .boardspace-todo-shape__drag-handle {
+	flex: 0 0 auto;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: var(--boardspace-todo-drag-handle-width, 14px);
+	height: 20px;
+	padding: 0;
+	color: var(--text-faint);
+	cursor: grab;
+	opacity: 0.38;
+	margin-top: 4px;
+}
+
+.boardspace-editor .boardspace-todo-shape__checkbox {
+	margin-top: 4px;
+}
+
+.boardspace-todo-shape__task-row:hover .boardspace-todo-shape__drag-handle,
+.boardspace-todo-shape__drag-handle:focus-visible {
+	opacity: 0.82;
+}
+
+.boardspace-todo-shape__drag-handle[data-disabled="true"] {
+	opacity: 0;
+	pointer-events: none;
+}
+
+.boardspace-todo-shape__drag-dots {
+	display: block;
+	width: 8px;
+	height: 12px;
+	background-image: radial-gradient(currentColor 1px, transparent 1px);
+	background-size: 4px 4px;
+	background-position: 0 0;
+}
+
+.boardspace-todo-shape__task-placeholder {
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+	background: rgba(0, 0, 0, 0.12);
+	border-radius: 6px;
+}
+
+.boardspace-todo-shape__drag-layer {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+	z-index: 3;
+}
+
+.boardspace-todo-shape__drag-indicator {
+	position: absolute;
+	left: 0;
+	right: 0;
+	height: 2px;
+	background: rgba(255, 255, 255, 0.3);
+	transform: translateY(-1px);
+}
+
+.boardspace-todo-shape__drag-preview {
+	position: absolute;
+	left: 0;
+	pointer-events: none;
+}
+
+.boardspace-todo-shape__task-row--drag-preview {
+	padding: 0 2px;
+	border-radius: 6px;
+	background: rgba(0, 0, 0, 0.14);
+	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+	opacity: 0.92;
 }
 
 .boardspace-column-shape {

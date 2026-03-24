@@ -1,18 +1,20 @@
-import { App, TFile } from "obsidian";
+import { App, TFile, WorkspaceLeaf } from "obsidian";
 import { BOARDSPACE_VIEW_TYPE } from "types/board";
 
-export async function activateBoardView(app: App, file: TFile) {
+export async function activateBoardView(
+	app: App,
+	file: TFile,
+	leaf?: WorkspaceLeaf | null,
+) {
 	const { workspace } = app;
 
-	const leaf =
-		workspace.getLeavesOfType(BOARDSPACE_VIEW_TYPE)[0] ??
-		workspace.getLeaf(true);
+	const targetLeaf = leaf ?? workspace.activeLeaf ?? workspace.getLeaf(true);
 
-	await leaf.setViewState({
+	await targetLeaf.setViewState({
 		type: BOARDSPACE_VIEW_TYPE,
 		state: { file: file.path },
 		active: true,
 	});
 
-	workspace.revealLeaf(leaf);
+	workspace.revealLeaf(targetLeaf);
 }

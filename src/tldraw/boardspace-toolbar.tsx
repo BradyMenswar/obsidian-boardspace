@@ -18,6 +18,7 @@ export function BoardspaceToolbar() {
 			<EraserToolbarItem />
 			<ArrowToolbarItem />
 			<NoteToolbarItem />
+			<ToolbarItem tool="todo" />
 			<ToolbarItem tool="column" />
 		</DefaultToolbar>
 	);

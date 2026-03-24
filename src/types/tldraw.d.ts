@@ -1,6 +1,7 @@
 import "@tldraw/tlschema";
 import type {
 	TLDefaultColorStyle,
+	TLDefaultDashStyle,
 	TLDefaultFillStyle,
 	TLDefaultSizeStyle,
 	TLRichText,
@@ -11,6 +12,7 @@ declare module "@tldraw/tlschema" {
 		"board-column": {
 			collapsed: boolean;
 			color: TLDefaultColorStyle;
+			dash: TLDefaultDashStyle;
 			fill: TLDefaultFillStyle;
 			h: number;
 			minH: number;
@@ -22,11 +24,28 @@ declare module "@tldraw/tlschema" {
 		};
 		"board-note": {
 			color: TLDefaultColorStyle;
+			dash: TLDefaultDashStyle;
 			fill: TLDefaultFillStyle;
 			h: number;
 			minH: number;
 			richText: TLRichText;
 			size: TLDefaultSizeStyle;
+			topBarColor: TLDefaultColorStyle;
+			topBarEnabled: boolean;
+			w: number;
+		};
+		"board-todo": {
+			color: TLDefaultColorStyle;
+			dash: TLDefaultDashStyle;
+			fill: TLDefaultFillStyle;
+			h: number;
+			size: TLDefaultSizeStyle;
+			tasks: Array<{
+				checked: boolean;
+				id: string;
+				text: string;
+			}>;
+			title: string;
 			topBarColor: TLDefaultColorStyle;
 			topBarEnabled: boolean;
 			w: number;

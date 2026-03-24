@@ -17,10 +17,12 @@ import {
 	useValue,
 } from "@tldraw/editor";
 import {
+	DefaultDashStyle,
 	DefaultFillStyle,
 	DefaultSizeStyle,
 	StyleProp,
 	TLDefaultColorStyle,
+	TLDefaultDashStyle,
 	TLDefaultFillStyle,
 	TLDefaultSizeStyle,
 	TLRichText,
@@ -74,6 +76,7 @@ const boardNoteShapeVersions = createShapePropsMigrationIds("board-note", {
 	AddMinHeight: 2,
 	AddTopBar: 3,
 	UseRichText: 4,
+	AddDash: 5,
 });
 
 const boardNoteShapeMigrations = createShapePropsMigrationSequence({
@@ -117,6 +120,13 @@ const boardNoteShapeMigrations = createShapePropsMigrationSequence({
 				return props;
 			},
 		},
+		{
+			id: boardNoteShapeVersions.AddDash,
+			up: (props) => {
+				props.dash = "solid";
+			},
+			down: ({ dash: _dash, ...props }) => props,
+		},
 	],
 });
 
@@ -125,6 +135,7 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 
 	static override props = {
 		color: DefaultColorStyle,
+		dash: DefaultDashStyle,
 		fill: DefaultFillStyle,
 		h: T.number,
 		minH: T.number,
@@ -144,6 +155,7 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 	override getDefaultProps(): BoardNoteShape["props"] {
 		return {
 			color: "black",
+			dash: "solid",
 			fill: "semi",
 			h: BOARD_NOTE_MIN_HEIGHT,
 			minH: BOARD_NOTE_MIN_HEIGHT,
@@ -301,11 +313,11 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 		() =>
 			getBoardNoteCardStyles(
 				shape.props.color,
+				shape.props.dash,
 				shape.props.fill,
 				isDarkMode,
-				{ inColumn: isInColumn },
 			),
-		[isDarkMode, isInColumn, shape.props.color, shape.props.fill],
+		[isDarkMode, shape.props.color, shape.props.dash, shape.props.fill],
 	);
 	const topBarStyles = useMemo(
 		() => getBoardNoteBarStyles(shape.props.topBarColor, isDarkMode),
@@ -387,12 +399,15 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 
 export function getBoardNoteCardStyles(
 	color: TLDefaultColorStyle,
+	dash: TLDefaultDashStyle,
 	fill: TLDefaultFillStyle,
 	isDarkMode: boolean,
-	options?: { inColumn?: boolean },
 ) : CSSProperties {
 	const theme = getDefaultColorTheme({ isDarkMode });
 	const patternColor = getColorValue(theme, color, "pattern");
+	const borderColor = isDarkMode
+		? "rgba(255, 255, 255, 0.16)"
+		: "rgba(0, 0, 0, 0.14)";
 	const baseFill =
 		fill === "none" || fill === "pattern" || fill === "lined-fill"
 			? "semi"
@@ -413,10 +428,15 @@ export function getBoardNoteCardStyles(
 				: fill === "lined-fill"
 					? "100% 12px"
 					: undefined,
-		border: "0",
-		boxShadow: options?.inColumn
-			? "inset 0 0 0 1px rgba(255, 255, 255, 0.15)"
-			: undefined,
+		border:
+			dash === "draw"
+				? "0"
+				: dash === "solid"
+					? `1px solid ${borderColor}`
+					: dash === "dashed"
+						? `1px dashed ${borderColor}`
+						: `1px dotted ${borderColor}`,
+		boxShadow: undefined,
 		"--boardspace-note-placeholder-color": "var(--text-faint)",
 	} as CSSProperties;
 }

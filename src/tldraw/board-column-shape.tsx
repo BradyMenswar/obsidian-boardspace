@@ -20,6 +20,7 @@ import {
 } from "@tldraw/editor";
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import {
+	DefaultDashStyle,
 	DefaultFillStyle,
 	DefaultSizeStyle,
 	TLDefaultFillStyle,
@@ -61,6 +62,7 @@ export type BoardColumnShape = Extract<TLShape, { type: "board-column" }>;
 
 const boardColumnShapeVersions = createShapePropsMigrationIds("board-column", {
 	AddStyleProps: 1,
+	AddDash: 2,
 });
 
 const boardColumnShapeMigrations = createShapePropsMigrationSequence({
@@ -83,6 +85,13 @@ const boardColumnShapeMigrations = createShapePropsMigrationSequence({
 				...props
 			}) => props,
 		},
+		{
+			id: boardColumnShapeVersions.AddDash,
+			up: (props) => {
+				props.dash = "solid";
+			},
+			down: ({ dash: _dash, ...props }) => props,
+		},
 	],
 });
 
@@ -96,6 +105,7 @@ export class BoardColumnShapeUtil extends BaseBoxShapeUtil<BoardColumnShape> {
 
 	static override props = {
 		color: DefaultColorStyle,
+		dash: DefaultDashStyle,
 		h: T.number,
 		fill: DefaultFillStyle,
 		minH: T.number,
@@ -132,6 +142,7 @@ export class BoardColumnShapeUtil extends BaseBoxShapeUtil<BoardColumnShape> {
 	override getDefaultProps(): BoardColumnShape["props"] {
 		return {
 			color: "black",
+			dash: "solid",
 			fill: "semi",
 			h: BOARD_COLUMN_DEFAULT_HEIGHT,
 			minH: BOARD_COLUMN_MIN_HEIGHT,
@@ -314,7 +325,7 @@ export class BoardColumnShapeUtil extends BaseBoxShapeUtil<BoardColumnShape> {
 			}),
 		);
 
-		const draggedShape = nextShapes.find((child) => child.type === "board-note");
+		const draggedShape = nextShapes.find(isColumnAllowedShape);
 		if (canRestoreOriginalIndices) {
 			for (const child of previousChildren) {
 				this.editor.updateShape({
@@ -346,7 +357,7 @@ export class BoardColumnShapeUtil extends BaseBoxShapeUtil<BoardColumnShape> {
 			return;
 		}
 
-		const draggedShape = draggingShapes.find((child) => child.type === "board-note");
+		const draggedShape = draggingShapes.find(isColumnAllowedShape);
 		if (!draggedShape) {
 			return;
 		}
@@ -433,10 +444,11 @@ function BoardColumnShapeView({ shape }: { shape: BoardColumnShape }) {
 		() =>
 			getBoardNoteCardStyles(
 				shape.props.color,
+				shape.props.dash,
 				shape.props.fill,
 				isDarkMode,
 			),
-		[isDarkMode, shape.props.color, shape.props.fill],
+		[isDarkMode, shape.props.color, shape.props.dash, shape.props.fill],
 	);
 	const topBarStyles = useMemo(
 		() => getBoardNoteBarStyles(shape.props.topBarColor, isDarkMode),

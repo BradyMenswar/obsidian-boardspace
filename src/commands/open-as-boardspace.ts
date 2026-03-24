@@ -6,6 +6,6 @@ export function openCurrentFileAsBoardspace(app: App, checking: boolean) {
 	if (!file || file.extension !== "md") return false;
 	if (checking) return true;
 
-	activateBoardView(app, file);
+	void activateBoardView(app, file, app.workspace.activeLeaf);
 	return true;
 }

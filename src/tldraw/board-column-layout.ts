@@ -16,9 +16,13 @@ import {
 	BOARD_COLUMN_SHELL_PADDING_BOTTOM,
 } from "./board-column-config";
 import { BoardNoteShape, getBoardNoteMeasuredHeight } from "./board-note-shape";
+import { BoardTodoShape, getBoardTodoMeasuredHeight } from "./board-todo-shape";
 import { TLDefaultSizeStyle } from "@tldraw/tlschema";
 
-const COLUMN_ALLOWED_SHAPE_TYPES = new Set<TLShape["type"]>(["board-note"]);
+const COLUMN_ALLOWED_SHAPE_TYPES = new Set<TLShape["type"]>([
+	"board-note",
+	"board-todo",
+]);
 
 type BoardColumnCounterKind = "board" | "card";
 
@@ -84,14 +88,20 @@ export function getBoardColumnLayoutResult(
 	const updates: TLShapePartial[] = [];
 
 	for (const shape of childShapes) {
-		if (shape.type !== "board-note") {
+		if (shape.type === "board-note") {
+			const nextShape = getNormalizedBoardNoteShape(editor, shape, innerWidth, nextY);
+			updates.push(nextShape.update);
+			nextY += nextShape.height;
+			nextY += BOARD_COLUMN_CHILD_GAP;
 			continue;
 		}
 
-		const nextShape = getNormalizedBoardNoteShape(editor, shape, innerWidth, nextY);
-		updates.push(nextShape.update);
-		nextY += nextShape.height;
-		nextY += BOARD_COLUMN_CHILD_GAP;
+		if (shape.type === "board-todo") {
+			const nextShape = getNormalizedBoardTodoShape(editor, shape, innerWidth, nextY);
+			updates.push(nextShape.update);
+			nextY += nextShape.height;
+			nextY += BOARD_COLUMN_CHILD_GAP;
+		}
 	}
 
 	const contentHeight =
@@ -161,12 +171,12 @@ export function getBoardColumnInsertionIndicatorY(
 	size: TLDefaultSizeStyle,
 ) {
 	const draggedShape = editor.getShape(draggedShapeId);
-	if (!draggedShape || draggedShape.type !== "board-note") {
+	if (!draggedShape || !isBoardColumnCardShape(draggedShape)) {
 		return null;
 	}
 
 	const siblings = getBoardColumnChildren(editor, parentId)
-		.filter((shape): shape is BoardNoteShape => shape.type === "board-note")
+		.filter(isBoardColumnCardShape)
 		.filter((shape) => shape.id !== draggedShapeId)
 		.sort((a, b) => {
 			if (Math.abs(a.y - b.y) >= 1) {
@@ -180,10 +190,10 @@ export function getBoardColumnInsertionIndicatorY(
 		return getBoardColumnBodyTop(size) + BOARD_COLUMN_CHILD_GAP / 2;
 	}
 
-	const draggedCenterY = draggedShape.y + draggedShape.props.h / 2;
+	const draggedCenterY = draggedShape.y + getBoardColumnCardHeight(draggedShape) / 2;
 
 	for (const sibling of siblings) {
-		const siblingCenterY = sibling.y + sibling.props.h / 2;
+		const siblingCenterY = sibling.y + getBoardColumnCardHeight(sibling) / 2;
 		if (draggedCenterY < siblingCenterY) {
 			return Math.max(
 				getBoardColumnBodyTop(size),
@@ -197,7 +207,7 @@ export function getBoardColumnInsertionIndicatorY(
 		return getBoardColumnBodyTop(size) + BOARD_COLUMN_CHILD_GAP / 2;
 	}
 
-	return lastSibling.y + lastSibling.props.h + BOARD_COLUMN_CHILD_GAP / 2;
+	return lastSibling.y + getBoardColumnCardHeight(lastSibling) + BOARD_COLUMN_CHILD_GAP / 2;
 }
 
 export function getAffectedBoardColumnIdsForShapeChange(
@@ -226,7 +236,7 @@ export function getAffectedBoardColumnIdsForShapeChange(
 }
 
 function getBoardColumnCounterKind(shape: TLShape): BoardColumnCounterKind | undefined {
-	if (shape.type === "board-note") {
+	if (shape.type === "board-note" || shape.type === "board-todo") {
 		return "card";
 	}
 
@@ -263,4 +273,43 @@ function getNormalizedBoardNoteShape(
 			},
 		},
 	};
+}
+
+function getNormalizedBoardTodoShape(
+	editor: Editor,
+	shape: BoardTodoShape,
+	width: number,
+	y: number,
+): { height: number; update: TLShapePartial<BoardTodoShape> } {
+	const measuredHeight = getBoardTodoMeasuredHeight(editor, {
+		...shape,
+		props: {
+			...shape.props,
+			w: width,
+		},
+	});
+
+	return {
+		height: measuredHeight,
+		update: {
+			id: shape.id,
+			type: shape.type,
+			x: BOARD_COLUMN_PADDING,
+			y,
+			props: {
+				h: measuredHeight,
+				w: width,
+			},
+		},
+	};
+}
+
+function isBoardColumnCardShape(
+	shape: TLShape,
+): shape is BoardNoteShape | BoardTodoShape {
+	return shape.type === "board-note" || shape.type === "board-todo";
+}
+
+function getBoardColumnCardHeight(shape: BoardNoteShape | BoardTodoShape) {
+	return shape.props.h;
 }
