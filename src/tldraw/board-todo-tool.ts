@@ -1,5 +1,4 @@
 import {
-	DefaultColorStyle,
 	DefaultFillStyle,
 	DefaultSizeStyle,
 	StateNode,
@@ -11,6 +10,12 @@ import {
 	BOARD_TODO_DEFAULT_WIDTH,
 	getBoardTodoAutoHeight,
 } from "./board-todo-config";
+import {
+	BoardNoteTopBarColorStyle,
+	BoardNoteTopBarCustomColorStyle,
+	BoardspaceColorStyle,
+	BoardspaceCustomColorStyle,
+} from "./board-note-shape";
 import {
 	BoardTodoShape,
 	createBoardTodoTask,
@@ -61,7 +66,8 @@ export function createBoardTodoShapeAtPoint(
 		x: center.x - BOARD_TODO_DEFAULT_WIDTH / 2,
 		y: center.y - height / 2,
 		props: {
-			color: editor.getStyleForNextShape(DefaultColorStyle),
+			color: editor.getStyleForNextShape(BoardspaceColorStyle),
+			customColor: editor.getStyleForNextShape(BoardspaceCustomColorStyle),
 			fill:
 				editor.getCurrentToolId() === "todo"
 					? editor.getStyleForNextShape(DefaultFillStyle)
@@ -70,8 +76,10 @@ export function createBoardTodoShapeAtPoint(
 			size,
 			tasks: [createBoardTodoTask()],
 			title: "",
-			topBarColor: editor.getStyleForNextShape(DefaultColorStyle),
-			topBarEnabled: false,
+			topBarColor: editor.getStyleForNextShape(BoardNoteTopBarColorStyle),
+			topBarCustomColor: editor.getStyleForNextShape(
+				BoardNoteTopBarCustomColorStyle,
+			),
 			w: BOARD_TODO_DEFAULT_WIDTH,
 		},
 	});

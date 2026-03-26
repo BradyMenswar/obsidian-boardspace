@@ -2,31 +2,28 @@ import {
 	BaseBoxShapeUtil,
 	createShapePropsMigrationIds,
 	createShapePropsMigrationSequence,
+	DefaultDashStyle,
+	DefaultFillStyle,
+	DefaultSizeStyle,
 	Editor,
-	DefaultColorStyle,
 	getIndexAbove,
 	HTMLContainer,
 	Rectangle2d,
 	T,
+	TLDefaultFillStyle,
+	TLDefaultSizeStyle,
 	TLDragShapesOutInfo,
 	TLDragShapesOverInfo,
 	TLResizeInfo,
 	TLShape,
 	Vec,
+	LABEL_FONT_SIZES,
 	resizeBox,
 	useEditor,
 	useIsEditing,
 	useValue,
-} from "@tldraw/editor";
+} from "tldraw";
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
-import {
-	DefaultDashStyle,
-	DefaultFillStyle,
-	DefaultSizeStyle,
-	TLDefaultFillStyle,
-	TLDefaultSizeStyle,
-} from "@tldraw/tlschema";
-import { LABEL_FONT_SIZES } from "tldraw";
 import {
 	BOARD_COLUMN_DEFAULT_HEIGHT,
 	BOARD_COLUMN_DEFAULT_WIDTH,
@@ -52,7 +49,12 @@ import {
 	useBoardColumnDragState,
 } from "./board-column-drag-state";
 import {
+	BOARDSPACE_DEFAULT_CUSTOM_COLOR,
+	BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+	BoardNoteTopBarCustomColorStyle,
 	BoardNoteTopBarColorStyle,
+	BoardspaceColorStyle,
+	BoardspaceCustomColorStyle,
 	getBoardNoteBarStyles,
 	getBoardNoteCardStyles,
 	getBoardNoteTextColor,
@@ -71,17 +73,19 @@ const boardColumnShapeMigrations = createShapePropsMigrationSequence({
 			id: boardColumnShapeVersions.AddStyleProps,
 			up: (props) => {
 				props.color = "black";
+				props.customColor = BOARDSPACE_DEFAULT_CUSTOM_COLOR;
 				props.fill = "semi";
 				props.size = "m";
-				props.topBarColor = "black";
-				props.topBarEnabled = false;
+				props.topBarColor = BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR;
+				props.topBarCustomColor = BOARDSPACE_DEFAULT_CUSTOM_COLOR;
 			},
 			down: ({
 				color: _color,
+				customColor: _customColor,
 				fill: _fill,
 				size: _size,
 				topBarColor: _topBarColor,
-				topBarEnabled: _topBarEnabled,
+				topBarCustomColor: _topBarCustomColor,
 				...props
 			}) => props,
 		},
@@ -89,6 +93,8 @@ const boardColumnShapeMigrations = createShapePropsMigrationSequence({
 			id: boardColumnShapeVersions.AddDash,
 			up: (props) => {
 				props.dash = "solid";
+				props.customColor ??= BOARDSPACE_DEFAULT_CUSTOM_COLOR;
+				props.topBarCustomColor ??= BOARDSPACE_DEFAULT_CUSTOM_COLOR;
 			},
 			down: ({ dash: _dash, ...props }) => props,
 		},
@@ -104,7 +110,8 @@ export class BoardColumnShapeUtil extends BaseBoxShapeUtil<BoardColumnShape> {
 	static override type = "board-column" as const;
 
 	static override props = {
-		color: DefaultColorStyle,
+		color: BoardspaceColorStyle,
+		customColor: BoardspaceCustomColorStyle,
 		dash: DefaultDashStyle,
 		h: T.number,
 		fill: DefaultFillStyle,
@@ -113,7 +120,7 @@ export class BoardColumnShapeUtil extends BaseBoxShapeUtil<BoardColumnShape> {
 		title: T.string,
 		collapsed: T.boolean,
 		topBarColor: BoardNoteTopBarColorStyle,
-		topBarEnabled: T.boolean,
+		topBarCustomColor: BoardNoteTopBarCustomColorStyle,
 		w: T.number,
 	};
 
@@ -142,6 +149,7 @@ export class BoardColumnShapeUtil extends BaseBoxShapeUtil<BoardColumnShape> {
 	override getDefaultProps(): BoardColumnShape["props"] {
 		return {
 			color: "black",
+			customColor: BOARDSPACE_DEFAULT_CUSTOM_COLOR,
 			dash: "solid",
 			fill: "semi",
 			h: BOARD_COLUMN_DEFAULT_HEIGHT,
@@ -149,8 +157,8 @@ export class BoardColumnShapeUtil extends BaseBoxShapeUtil<BoardColumnShape> {
 			size: "m",
 			title: "Untitled column",
 			collapsed: false,
-			topBarColor: "black",
-			topBarEnabled: false,
+			topBarColor: BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+			topBarCustomColor: BOARDSPACE_DEFAULT_CUSTOM_COLOR,
 			w: BOARD_COLUMN_DEFAULT_WIDTH,
 		};
 	}
@@ -444,19 +452,42 @@ function BoardColumnShapeView({ shape }: { shape: BoardColumnShape }) {
 		() =>
 			getBoardNoteCardStyles(
 				shape.props.color,
+				shape.props.customColor,
 				shape.props.dash,
 				shape.props.fill,
 				isDarkMode,
 			),
-		[isDarkMode, shape.props.color, shape.props.dash, shape.props.fill],
+		[
+			isDarkMode,
+			shape.props.color,
+			shape.props.customColor,
+			shape.props.dash,
+			shape.props.fill,
+		],
 	);
 	const topBarStyles = useMemo(
-		() => getBoardNoteBarStyles(shape.props.topBarColor, isDarkMode),
-		[isDarkMode, shape.props.topBarColor],
+		() =>
+			getBoardNoteBarStyles(
+				shape.props.topBarColor,
+				shape.props.topBarCustomColor,
+				isDarkMode,
+			),
+		[isDarkMode, shape.props.topBarColor, shape.props.topBarCustomColor],
 	);
 	const textColor = useMemo(
-		() => getBoardNoteTextColor(shape.props.color, isDarkMode),
-		[isDarkMode, shape.props.color],
+		() =>
+			getBoardNoteTextColor(
+				shape.props.color,
+				shape.props.customColor,
+				shape.props.fill,
+				isDarkMode,
+			),
+		[
+			isDarkMode,
+			shape.props.color,
+			shape.props.customColor,
+			shape.props.fill,
+		],
 	);
 	const isSourceColumn = dragState.sourceColumnId === shape.id;
 	const isTargetColumn = dragState.targetColumnId === shape.id;
@@ -540,8 +571,7 @@ function BoardColumnShapeView({ shape }: { shape: BoardColumnShape }) {
 			>
 				<div
 					className="boardspace-column-shape__top-bar"
-					data-enabled={shape.props.topBarEnabled ? "true" : "false"}
-					style={shape.props.topBarEnabled ? topBarStyles : undefined}
+					style={topBarStyles}
 				/>
 				<div className="boardspace-column-shape__header" style={headerStyles}>
 					<button

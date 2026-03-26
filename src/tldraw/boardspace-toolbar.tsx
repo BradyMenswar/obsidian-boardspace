@@ -1,4 +1,5 @@
 import {
+	AssetToolbarItem,
 	ArrowToolbarItem,
 	DefaultToolbar,
 	DrawToolbarItem,
@@ -18,8 +19,10 @@ export function BoardspaceToolbar() {
 			<EraserToolbarItem />
 			<ArrowToolbarItem />
 			<NoteToolbarItem />
+			<AssetToolbarItem />
 			<ToolbarItem tool="todo" />
 			<ToolbarItem tool="column" />
+			<ToolbarItem tool="swatch" />
 		</DefaultToolbar>
 	);
 }

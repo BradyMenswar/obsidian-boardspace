@@ -1,12 +1,12 @@
 import { TFile } from "obsidian";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
 	ArrowShapeTool,
 	DefaultHelperButtonsContent,
+	DefaultImageToolbar,
 	DefaultNavigationPanel,
 	DefaultRichTextToolbar,
 	DefaultStylePanel,
-	DefaultColorStyle,
 	DefaultDashStyle,
 	DrawShapeTool,
 	EraserTool,
@@ -16,7 +16,6 @@ import {
 	kickoutOccludedShapes,
 	StylePanelArrowheadPicker,
 	StylePanelArrowKindPicker,
-	StylePanelButtonPicker,
 	StylePanelColorPicker,
 	StylePanelDashPicker,
 	StylePanelFillPicker,
@@ -66,13 +65,40 @@ import {
 	getBoardColumnVisualOrder,
 } from "./board-column-layout";
 import {
+	BOARDSPACE_CUSTOM_COLOR,
+	BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
 	BoardNoteShape,
+	BoardNoteTopBarCustomColorStyle,
 	BoardNoteTopBarColorStyle,
+	BoardspaceColorStyle,
+	BoardspaceCustomColorStyle,
+	normalizeBoardspaceCustomColor,
 } from "./board-note-shape";
 import { BoardNoteTool } from "./board-note-tool";
 import { BoardNoteShapeUtil } from "./board-note-shape";
+import {
+	BOARD_SWATCH_DEFAULT_COLOR,
+	BoardSwatchColorValueStyle,
+	BoardSwatchLabelModeStyle,
+	BoardSwatchShape,
+	BoardSwatchShapeUtil,
+	normalizeBoardSwatchColor,
+} from "./board-swatch-shape";
+import { BoardSwatchTool } from "./board-swatch-tool";
 import { BoardTodoShape, BoardTodoShapeUtil } from "./board-todo-shape";
 import { BoardTodoTool } from "./board-todo-tool";
+import {
+	BoardspaceCanvasToneProvider,
+	useBoardspaceCanvasTone,
+} from "./boardspace-canvas-tone";
+import {
+	addBoardspaceMediaCaptionActions,
+	BoardspaceContextMenu,
+	BoardspaceMediaCaptionStylePanel,
+	BOARDSPACE_MEDIA_CAPTION_TRANSLATIONS,
+	registerBoardspaceMediaCaptionNormalization,
+	useSelectedBoardspaceMediaCaption,
+} from "./boardspace-media-caption";
 import { BoardspaceToolbar } from "./boardspace-toolbar";
 import { BoardspaceZoomMenu } from "./boardspace-zoom-menu";
 import {
@@ -91,7 +117,7 @@ interface BoardspaceEditorProps {
 
 const BOARDSPACE_COMPONENTS: TLComponents = {
 	ActionsMenu: null,
-	ContextMenu: null,
+	ContextMenu: BoardspaceContextMenu,
 	CursorChatBubble: null,
 	DebugMenu: null,
 	DebugPanel: null,
@@ -99,7 +125,7 @@ const BOARDSPACE_COMPONENTS: TLComponents = {
 	FollowingIndicator: null,
 	HelpMenu: null,
 	HelperButtons: BoardspaceHelperButtons,
-	ImageToolbar: null,
+	ImageToolbar: DefaultImageToolbar,
 	KeyboardShortcutsDialog: null,
 	MainMenu: null,
 	MenuPanel: null,
@@ -118,9 +144,13 @@ const BOARDSPACE_COMPONENTS: TLComponents = {
 };
 
 const BOARDSPACE_OVERRIDES: TLUiOverrides = {
+	actions(editor, actions, helpers) {
+		return addBoardspaceMediaCaptionActions(editor, actions, helpers);
+	},
 	tools(editor, tools) {
 		return pickBoardspaceTools(editor, tools);
 	},
+	translations: BOARDSPACE_MEDIA_CAPTION_TRANSLATIONS,
 };
 
 const BOARDSPACE_TOOLS = [
@@ -132,11 +162,13 @@ const BOARDSPACE_TOOLS = [
 	BoardNoteTool,
 	BoardTodoTool,
 	BoardColumnTool,
+	BoardSwatchTool,
 ] as const;
 const BOARDSPACE_SHAPES = [
 	BoardNoteShapeUtil,
 	BoardTodoShapeUtil,
 	BoardColumnShapeUtil,
+	BoardSwatchShapeUtil,
 ] as const;
 const BOARDSPACE_OPTIONS = {
 	actionShortcutsLocation: "menu",
@@ -163,6 +195,26 @@ export function BoardspaceEditor({
 	onSnapshotChange,
 	snapshot,
 }: BoardspaceEditorProps) {
+	return (
+		<BoardspaceCanvasToneProvider>
+			<BoardspaceEditorInner
+				file={file}
+				loadKey={loadKey}
+				onSnapshotChange={onSnapshotChange}
+				snapshot={snapshot}
+			/>
+		</BoardspaceCanvasToneProvider>
+	);
+}
+
+function BoardspaceEditorInner({
+	file,
+	loadKey,
+	onSnapshotChange,
+	snapshot,
+}: BoardspaceEditorProps) {
+	const { currentTone } = useBoardspaceCanvasTone();
+
 	const handleMount = (editor: Editor) => {
 		normalizeToSinglePage(editor);
 		syncTldrawThemeWithObsidian();
@@ -176,6 +228,8 @@ export function BoardspaceEditor({
 		const cleanupDoubleClick =
 			replaceCanvasDoubleClickWithBoardNote(editor);
 		const cleanupColumnLayout = registerBoardColumnAutoLayout(editor);
+		const cleanupMediaCaptions =
+			registerBoardspaceMediaCaptionNormalization(editor);
 		const removeSnapshotListener = editor.store.listen(
 			() => {
 				onSnapshotChange?.(editor.getSnapshot());
@@ -188,12 +242,17 @@ export function BoardspaceEditor({
 			cleanupGestures?.();
 			cleanupDoubleClick?.();
 			cleanupColumnLayout?.();
+			cleanupMediaCaptions?.();
 			removeSnapshotListener();
 		};
 	};
 
 	return (
-		<div className="boardspace-editor" data-board-file={file?.path ?? ""}>
+		<div
+			className="boardspace-editor"
+			data-board-file={file?.path ?? ""}
+			data-canvas-tone={currentTone}
+		>
 			<Tldraw
 				autoFocus={false}
 				components={BOARDSPACE_COMPONENTS}
@@ -240,6 +299,10 @@ function pickBoardspaceTools(
 		nextTools.note = tools.note;
 	}
 
+	if (tools.asset) {
+		nextTools.asset = tools.asset;
+	}
+
 	nextTools.todo = {
 		id: "todo",
 		icon: <TodoToolIcon />,
@@ -257,6 +320,16 @@ function pickBoardspaceTools(
 		label: "Column",
 		onSelect() {
 			editor.setCurrentTool("column");
+		},
+	};
+
+	nextTools.swatch = {
+		id: "swatch",
+		icon: <SwatchToolIcon />,
+		kbd: "w",
+		label: "Color swatch",
+		onSelect() {
+			editor.setCurrentTool("swatch");
 		},
 	};
 
@@ -501,11 +574,62 @@ function TodoToolIcon() {
 	);
 }
 
+function SwatchToolIcon() {
+	return (
+		<svg
+			viewBox="0 0 16 16"
+			aria-hidden="true"
+			fill="none"
+			stroke="currentColor"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			strokeWidth="1.2"
+		>
+			<rect x="2.4" y="3.2" width="11.2" height="9.6" rx="1.2" />
+			<path d="M4.6 10.6h6.8" opacity="0.78" />
+		</svg>
+	);
+}
+
 function BoardspaceStylePanel(props: TLUiStylePanelProps) {
+	const selectedMediaCaption = useSelectedBoardspaceMediaCaption();
+
+	if (selectedMediaCaption) {
+		return (
+			<BoardspaceMediaCaptionStylePanel
+				captionShape={selectedMediaCaption}
+				props={props}
+			>
+				<BoardspaceMediaCaptionStylePanelContent
+					captionShape={selectedMediaCaption}
+				/>
+			</BoardspaceMediaCaptionStylePanel>
+		);
+	}
+
 	return (
 		<DefaultStylePanel {...props}>
 			<BoardspaceStylePanelContent />
 		</DefaultStylePanel>
+	);
+}
+
+function BoardspaceMediaCaptionStylePanelContent({
+	captionShape,
+}: {
+	captionShape: BoardNoteShape;
+}) {
+	return (
+		<>
+			<StylePanelSection>
+				<BoardspaceColorSection selectedShapes={[captionShape]} />
+				<StylePanelOpacityPicker />
+			</StylePanelSection>
+			<BoardspaceDefaultStylePanelContent
+				omitFirstSection={true}
+				useBoardspaceDashPicker={true}
+			/>
+		</>
 	);
 }
 
@@ -520,25 +644,53 @@ function BoardspaceStylePanelContent() {
 					(shape): shape is BoardspaceStylableShape =>
 						shape.type === "board-note" ||
 						shape.type === "board-column" ||
+						shape.type === "board-swatch" ||
 						shape.type === "board-todo",
 				),
 		[editor],
+	);
+	const selectedSwatches = selectedStylableShapes.filter(
+		(shape): shape is BoardSwatchShape => shape.type === "board-swatch",
+	);
+	const selectedColorTargetShapes = selectedStylableShapes.filter(
+		(shape): shape is BoardspaceColorTargetShape => shape.type !== "board-swatch",
 	);
 
 	if (selectedStylableShapes.length === 0) {
 		return <BoardspaceDefaultStylePanelContent />;
 	}
 
+	if (selectedSwatches.length === selectedStylableShapes.length) {
+		return <BoardspaceSwatchStylePanelContent />;
+	}
+
+	if (selectedSwatches.length > 0) {
+		return <BoardspaceDefaultStylePanelContent />;
+	}
+
 	return (
 		<>
 			<StylePanelSection>
-				<BoardspaceColorSection selectedShapes={selectedStylableShapes} />
+				<BoardspaceColorSection selectedShapes={selectedColorTargetShapes} />
 				<StylePanelOpacityPicker />
 			</StylePanelSection>
 			<BoardspaceDefaultStylePanelContent
 				omitFirstSection={true}
 				useBoardspaceDashPicker={true}
 			/>
+		</>
+	);
+}
+
+function BoardspaceSwatchStylePanelContent() {
+	return (
+		<>
+			<StylePanelSection>
+				<BoardspaceSwatchColorPicker />
+			</StylePanelSection>
+			<StylePanelSection>
+				<BoardspaceSwatchLabelModePicker />
+			</StylePanelSection>
 		</>
 	);
 }
@@ -680,12 +832,20 @@ function BoardspaceHelperButtons() {
 	);
 }
 
-type BoardspaceStylableShape = BoardNoteShape | BoardColumnShape | BoardTodoShape;
+type BoardspaceStylableShape =
+	| BoardNoteShape
+	| BoardColumnShape
+	| BoardSwatchShape
+	| BoardTodoShape;
+type BoardspaceColorTargetShape =
+	| BoardNoteShape
+	| BoardColumnShape
+	| BoardTodoShape;
 
 function BoardspaceColorSection({
 	selectedShapes,
 }: {
-	selectedShapes: BoardspaceStylableShape[];
+	selectedShapes: BoardspaceColorTargetShape[];
 }) {
 	const editor = useEditor();
 	const [colorTarget, setColorTarget] = useState<"background" | "topBar">(
@@ -693,12 +853,20 @@ function BoardspaceColorSection({
 	);
 	const { styles, onHistoryMark, onValueChange } = useStylePanelContext();
 
-	const allTopBarsEnabled = selectedShapes.every(
-		(shape) => shape.props.topBarEnabled,
+	const allBackgroundsTransparent = selectedShapes.every(
+		(shape) => shape.props.fill === "none",
 	);
+	const allTopBarsTransparent = selectedShapes.every(
+		(shape) =>
+			shape.props.topBarColor === BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+	);
+	const backgroundCustomColor = styles.get(BoardspaceCustomColorStyle);
+	const topBarCustomColor = styles.get(BoardNoteTopBarCustomColorStyle);
 	const pickerStyle =
-		colorTarget === "topBar" ? BoardNoteTopBarColorStyle : DefaultColorStyle;
+		colorTarget === "topBar" ? BoardNoteTopBarColorStyle : BoardspaceColorStyle;
 	const pickerValue = styles.get(pickerStyle);
+	const customColorValue =
+		colorTarget === "topBar" ? topBarCustomColor : backgroundCustomColor;
 
 	if (!pickerValue) {
 		return null;
@@ -725,25 +893,9 @@ function BoardspaceColorSection({
 					type="button"
 					className="boardspace-style-panel__target-button"
 					data-active={colorTarget === "topBar" ? "true" : "false"}
-					data-enabled={allTopBarsEnabled ? "true" : "false"}
 					aria-pressed={colorTarget === "topBar"}
-					title={
-						allTopBarsEnabled
-							? "Apply colors to the top strip"
-							: "Turn on the top strip and apply colors to it"
-					}
-					onClick={() =>
-						setColorTarget((currentTarget) => {
-							const shouldDisableTopBar =
-								currentTarget === "topBar" && allTopBarsEnabled;
-
-							updateSelectedBoardspaceShapes(editor, {
-								topBarEnabled: shouldDisableTopBar ? false : true,
-							});
-
-							return shouldDisableTopBar ? "background" : "topBar";
-						})
-					}
+					title="Apply colors to the top strip"
+					onClick={() => setColorTarget("topBar")}
 				>
 					<span className="boardspace-style-panel__target-icon boardspace-style-panel__target-icon--top-bar" />
 				</button>
@@ -752,46 +904,31 @@ function BoardspaceColorSection({
 				key={colorTarget}
 				className="boardspace-style-panel__note-color-picker"
 			>
-				{colorTarget === "topBar" ? (
-					<BoardNoteTopBarColorPicker
-						value={pickerValue}
-						onHistoryMark={onHistoryMark}
-						onValueChange={(value) => {
-							onValueChange(BoardNoteTopBarColorStyle, value);
-							updateSelectedBoardspaceShapes(editor, {
-								topBarEnabled: true,
-							});
-						}}
-					/>
-				) : (
-					<StylePanelButtonPicker
-						title="Background color"
-						uiType="color"
-						style={pickerStyle}
-						items={BOARDSPACE_COLOR_VALUES.map((color) => ({
-							value: color,
-							icon: "color",
-						}))}
-						value={pickerValue}
-						onHistoryMark={onHistoryMark}
-						onValueChange={onValueChange}
-					/>
-				)}
-				<button
-					type="button"
-					className="tlui-button boardspace-style-panel__clear"
-					title={
-						colorTarget === "topBar"
-							? "Clear top strip color"
-							: "Clear background color"
+				<BoardspaceNoteColorPicker
+					title={colorTarget === "topBar" ? "Top strip color" : "Background color"}
+					value={pickerValue}
+					customColor={
+						customColorValue?.type === "shared"
+							? customColorValue.value
+							: undefined
 					}
-					onClick={() => {
-						onHistoryMark("clear note color");
-
+					onHistoryMark={onHistoryMark}
+					transparentActive={
+						colorTarget === "topBar"
+							? allTopBarsTransparent
+							: allBackgroundsTransparent
+					}
+					transparentLabel={
+						colorTarget === "topBar"
+							? "No top strip color"
+							: "No background color"
+					}
+					onTransparentSelect={() => {
 						if (colorTarget === "topBar") {
-							updateSelectedBoardspaceShapes(editor, {
-								topBarEnabled: false,
-							});
+							onValueChange(
+								BoardNoteTopBarColorStyle,
+								BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+							);
 							return;
 						}
 
@@ -799,21 +936,55 @@ function BoardspaceColorSection({
 							fill: "none",
 						});
 					}}
-				>
-					<span className="tlui-button__label">Clear</span>
-				</button>
+					onColorSelect={(value) => {
+						if (colorTarget === "topBar") {
+							onValueChange(BoardNoteTopBarColorStyle, value);
+							return;
+						}
+
+						onValueChange(BoardspaceColorStyle, value);
+						updateSelectedBoardspaceShapes(editor, (shape) =>
+							shape.props.fill === "none" ? { fill: "semi" } : null,
+						);
+					}}
+					onCustomColorSelect={(value) => {
+						if (colorTarget === "topBar") {
+							onValueChange(BoardNoteTopBarCustomColorStyle, value);
+							onValueChange(BoardNoteTopBarColorStyle, BOARDSPACE_CUSTOM_COLOR);
+							return;
+						}
+
+						onValueChange(BoardspaceCustomColorStyle, value);
+						onValueChange(BoardspaceColorStyle, BOARDSPACE_CUSTOM_COLOR);
+						updateSelectedBoardspaceShapes(editor, (shape) =>
+							shape.props.fill === "none" ? { fill: "semi" } : null,
+						);
+					}}
+				/>
 			</div>
 		</>
 	);
 }
 
-function BoardNoteTopBarColorPicker({
+function BoardspaceNoteColorPicker({
+	title,
+	transparentActive,
+	transparentLabel,
+	customColor,
 	onHistoryMark,
-	onValueChange,
+	onColorSelect,
+	onCustomColorSelect,
+	onTransparentSelect,
 	value,
 }: {
+	title: string;
+	transparentActive: boolean;
+	transparentLabel: string;
+	customColor?: string;
 	onHistoryMark: (id: string) => void;
-	onValueChange: (value: string) => void;
+	onColorSelect: (value: (typeof BOARDSPACE_COLOR_VALUES)[number]) => void;
+	onCustomColorSelect: (value: string) => void;
+	onTransparentSelect: () => void;
 	value:
 		| {
 				type: "mixed";
@@ -828,17 +999,59 @@ function BoardNoteTopBarColorPicker({
 	const theme = getDefaultColorTheme({
 		isDarkMode: editor.user.getIsDarkMode(),
 	});
+	const customInputRef = useRef<HTMLInputElement>(null);
+	const customActive =
+		!transparentActive &&
+		value?.type === "shared" &&
+		value.value === BOARDSPACE_CUSTOM_COLOR;
+	const customPreviewColor =
+		value?.type === "shared" &&
+		BOARDSPACE_COLOR_VALUES.includes(
+			value.value as (typeof BOARDSPACE_COLOR_VALUES)[number],
+		)
+			? getColorValue(
+					theme,
+					value.value as (typeof BOARDSPACE_COLOR_VALUES)[number],
+					"solid",
+				)
+			: normalizeBoardspaceCustomColor(customColor);
+	const selectedValue = transparentActive
+		? BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR
+		: value?.type === "shared"
+			? value.value
+			: null;
 
 	return (
-		<TldrawUiToolbar label="Top strip color">
+		<TldrawUiToolbar label={title}>
 			<TldrawUiToolbarToggleGroup
 				type="single"
-				value={value?.type === "shared" ? value.value : null}
+				value={selectedValue}
+				data-testid="style.color"
 				asChild
 			>
 				<TldrawUiGrid>
+					<TldrawUiToolbarToggleItem
+						type="icon"
+						value={BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR}
+						data-testid="style.color.transparent"
+						data-isactive={transparentActive ? "true" : "false"}
+						title={transparentLabel}
+						aria-label={transparentLabel}
+						onClick={() => {
+							onHistoryMark("clear note color");
+							onTransparentSelect();
+						}}
+					>
+						<span
+							className="boardspace-style-panel__color-swatch boardspace-style-panel__color-swatch--transparent"
+							aria-hidden="true"
+						/>
+					</TldrawUiToolbarToggleItem>
 					{BOARDSPACE_COLOR_VALUES.map((color) => {
-						const isActive = value?.type === "shared" && value.value === color;
+						const isActive =
+							!transparentActive &&
+							value?.type === "shared" &&
+							value.value === color;
 
 						return (
 							<TldrawUiToolbarToggleItem
@@ -846,16 +1059,168 @@ function BoardNoteTopBarColorPicker({
 								type="icon"
 								value={color}
 								data-isactive={isActive ? "true" : "false"}
-								title={`Top strip color - ${color}`}
+								data-testid={`style.color.${color}`}
+								title={`${title} - ${color}`}
 								onClick={() => {
 									onHistoryMark("point picker item");
-									onValueChange(color);
-								}}
-								style={{
-									color: getColorValue(theme, color, "solid"),
+									onColorSelect(color);
 								}}
 							>
-								<TldrawUiButtonIcon icon="color" />
+								<span
+									className="boardspace-style-panel__color-swatch"
+									style={{
+										color: getColorValue(theme, color, "solid"),
+									}}
+									aria-hidden="true"
+								/>
+							</TldrawUiToolbarToggleItem>
+						);
+					})}
+					<TldrawUiToolbarToggleItem
+						type="icon"
+						value={BOARDSPACE_CUSTOM_COLOR}
+						data-testid="style.color.custom"
+						data-isactive={customActive ? "true" : "false"}
+						title={`${title} - custom color`}
+						aria-label={`${title} - custom color`}
+						onClick={() => {
+							const input = customInputRef.current;
+							if (!input) {
+								return;
+							}
+
+							if (typeof input.showPicker === "function") {
+								input.showPicker();
+								return;
+							}
+
+							input.click();
+						}}
+					>
+						<span
+							className="boardspace-style-panel__color-swatch boardspace-style-panel__color-swatch--custom"
+							aria-hidden="true"
+						>
+							<span
+								className="boardspace-style-panel__color-swatch-preview"
+								style={{ backgroundColor: customPreviewColor }}
+							/>
+						</span>
+						<input
+							ref={customInputRef}
+							className="boardspace-style-panel__color-input"
+							type="color"
+							value={normalizeBoardspaceCustomColor(customPreviewColor)}
+							onChange={(event) => {
+								onHistoryMark("pick custom note color");
+								onCustomColorSelect(event.currentTarget.value);
+							}}
+						/>
+					</TldrawUiToolbarToggleItem>
+				</TldrawUiGrid>
+			</TldrawUiToolbarToggleGroup>
+		</TldrawUiToolbar>
+	);
+}
+
+function BoardspaceSwatchColorPicker() {
+	const { styles, onHistoryMark, onValueChange } = useStylePanelContext();
+	const inputRef = useRef<HTMLInputElement>(null);
+	const colorValue = styles.get(BoardSwatchColorValueStyle);
+	const previewColor =
+		colorValue?.type === "shared"
+			? normalizeBoardSwatchColor(colorValue.value)
+			: BOARD_SWATCH_DEFAULT_COLOR;
+
+	return (
+		<TldrawUiToolbar label="Swatch color">
+			<button
+				type="button"
+				className="boardspace-style-panel__swatch-color-button"
+				title="Choose swatch color"
+				onClick={() => {
+					const input = inputRef.current;
+					if (!input) {
+						return;
+					}
+
+					if (typeof input.showPicker === "function") {
+						input.showPicker();
+						return;
+					}
+
+					input.click();
+				}}
+			>
+				<span
+					className="boardspace-style-panel__swatch-color-preview"
+					style={{ backgroundColor: previewColor }}
+					aria-hidden="true"
+				/>
+				<span className="boardspace-style-panel__swatch-color-value">
+					{colorValue?.type === "mixed" ? "Mixed colors" : previewColor.toUpperCase()}
+				</span>
+				<input
+					ref={inputRef}
+					className="boardspace-style-panel__color-input"
+					type="color"
+					value={previewColor}
+					onChange={(event) => {
+						onHistoryMark("pick swatch color");
+						onValueChange(
+							BoardSwatchColorValueStyle,
+							normalizeBoardSwatchColor(event.currentTarget.value),
+						);
+					}}
+				/>
+			</button>
+		</TldrawUiToolbar>
+	);
+}
+
+function BoardspaceSwatchLabelModePicker() {
+	const { styles, onHistoryMark, onValueChange } = useStylePanelContext();
+	const labelMode = styles.get(BoardSwatchLabelModeStyle);
+
+	if (!labelMode) {
+		return null;
+	}
+
+	const items = [
+		{ value: "none", label: "Off" },
+		{ value: "hex", label: "Hex" },
+		{ value: "rgb", label: "RGB" },
+		{ value: "hsl", label: "HSL" },
+	] as const;
+
+	return (
+		<TldrawUiToolbar label="Color label">
+			<TldrawUiToolbarToggleGroup
+				type="single"
+				value={labelMode.type === "shared" ? labelMode.value : null}
+				data-testid="style.swatch-label-mode"
+				asChild
+			>
+				<TldrawUiGrid>
+					{items.map((item) => {
+						const isActive =
+							labelMode.type === "shared" && labelMode.value === item.value;
+
+						return (
+							<TldrawUiToolbarToggleItem
+								key={item.value}
+								type="icon"
+								value={item.value}
+								data-isactive={isActive ? "true" : "false"}
+								title={`Label format: ${item.label}`}
+								onClick={() => {
+									onHistoryMark("set swatch label mode");
+									onValueChange(BoardSwatchLabelModeStyle, item.value);
+								}}
+							>
+								<span className="boardspace-style-panel__text-toggle-label">
+									{item.label}
+								</span>
 							</TldrawUiToolbarToggleItem>
 						);
 					})}
@@ -865,28 +1230,44 @@ function BoardNoteTopBarColorPicker({
 	);
 }
 
-function updateSelectedBoardspaceShapes(
-	editor: Editor,
-	props: Partial<BoardspaceStylableShape["props"]>,
-) {
-	const selectedShapes = editor
+function getSelectedBoardspaceShapes(editor: Editor) {
+	return editor
 		.getSelectedShapes()
 		.filter(
-			(shape): shape is BoardspaceStylableShape =>
+			(shape): shape is BoardspaceColorTargetShape =>
 				shape.type === "board-note" ||
 				shape.type === "board-column" ||
 				shape.type === "board-todo",
 		);
+}
+
+function updateSelectedBoardspaceShapes(
+	editor: Editor,
+	props:
+		| Partial<BoardspaceColorTargetShape["props"]>
+		| ((
+				shape: BoardspaceColorTargetShape,
+		  ) => Partial<BoardspaceColorTargetShape["props"]> | null),
+) {
+	const selectedShapes = getSelectedBoardspaceShapes(editor);
 
 	if (selectedShapes.length === 0) {
 		return;
 	}
 
 	editor.updateShapes(
-		selectedShapes.map((shape) => ({
-			id: shape.id,
-			type: shape.type,
-			props,
-		})),
+		selectedShapes.flatMap((shape) => {
+			const nextProps = typeof props === "function" ? props(shape) : props;
+
+			if (!nextProps) {
+				return [];
+			}
+
+			return {
+				id: shape.id,
+				type: shape.type,
+				props: nextProps,
+			};
+		}),
 	);
 }

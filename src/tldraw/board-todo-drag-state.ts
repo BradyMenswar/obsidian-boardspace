@@ -1,4 +1,4 @@
-import { TLShapeId } from "@tldraw/editor";
+import type { TLShapeId } from "tldraw";
 import { useSyncExternalStore } from "react";
 
 export interface BoardTodoDragState {

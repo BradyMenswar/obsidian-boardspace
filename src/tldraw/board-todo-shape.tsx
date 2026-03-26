@@ -2,24 +2,23 @@ import {
 	BaseBoxShapeUtil,
 	createShapePropsMigrationIds,
 	createShapePropsMigrationSequence,
-	DefaultColorStyle,
+	DefaultDashStyle,
+	DefaultFillStyle,
+	DefaultSizeStyle,
+	FONT_FAMILIES,
 	HTMLContainer,
+	LABEL_FONT_SIZES,
 	Rectangle2d,
 	T,
+	TLDefaultFillStyle,
+	TLDefaultSizeStyle,
 	TLResizeInfo,
 	TLShape,
 	createShapeId,
 	resizeBox,
 	useEditor,
 	useValue,
-} from "@tldraw/editor";
-import {
-	DefaultDashStyle,
-	DefaultFillStyle,
-	DefaultSizeStyle,
-	TLDefaultFillStyle,
-	TLDefaultSizeStyle,
-} from "@tldraw/tlschema";
+} from "tldraw";
 import {
 	CSSProperties,
 	PointerEvent as ReactPointerEvent,
@@ -29,7 +28,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { FONT_FAMILIES, LABEL_FONT_SIZES } from "tldraw";
 import {
 	BOARD_TODO_DEFAULT_WIDTH,
 	BOARD_TODO_MIN_HEIGHT,
@@ -58,7 +56,12 @@ import {
 	useBoardTodoTaskTransferDragState,
 } from "./board-todo-task-drag-state";
 import {
+	BOARDSPACE_DEFAULT_CUSTOM_COLOR,
+	BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+	BoardNoteTopBarCustomColorStyle,
 	BoardNoteTopBarColorStyle,
+	BoardspaceColorStyle,
+	BoardspaceCustomColorStyle,
 	getBoardNoteBarStyles,
 	getBoardNoteCardStyles,
 	getBoardNoteTextColor,
@@ -103,6 +106,9 @@ const boardTodoShapeMigrations = createShapePropsMigrationSequence({
 			id: boardTodoShapeVersions.AddDash,
 			up: (props) => {
 				props.dash = "solid";
+				props.customColor ??= BOARDSPACE_DEFAULT_CUSTOM_COLOR;
+				props.topBarColor ??= BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR;
+				props.topBarCustomColor ??= BOARDSPACE_DEFAULT_CUSTOM_COLOR;
 			},
 			down: ({ dash: _dash, ...props }) => props,
 		},
@@ -113,7 +119,8 @@ export class BoardTodoShapeUtil extends BaseBoxShapeUtil<BoardTodoShape> {
 	static override type = "board-todo" as const;
 
 	static override props = {
-		color: DefaultColorStyle,
+		color: BoardspaceColorStyle,
+		customColor: BoardspaceCustomColorStyle,
 		dash: DefaultDashStyle,
 		fill: DefaultFillStyle,
 		h: T.number,
@@ -121,7 +128,7 @@ export class BoardTodoShapeUtil extends BaseBoxShapeUtil<BoardTodoShape> {
 		tasks: T.arrayOf(boardTodoTaskValidator),
 		title: T.string,
 		topBarColor: BoardNoteTopBarColorStyle,
-		topBarEnabled: T.boolean,
+		topBarCustomColor: BoardNoteTopBarCustomColorStyle,
 		w: T.number,
 	};
 
@@ -138,14 +145,15 @@ export class BoardTodoShapeUtil extends BaseBoxShapeUtil<BoardTodoShape> {
 	override getDefaultProps(): BoardTodoShape["props"] {
 		return {
 			color: "black",
+			customColor: BOARDSPACE_DEFAULT_CUSTOM_COLOR,
 			dash: "solid",
 			fill: "semi",
 			h: getBoardTodoAutoHeight(1, "m", false),
 			size: "m",
 			tasks: [createBoardTodoTask()],
 			title: "",
-			topBarColor: "black",
-			topBarEnabled: false,
+			topBarColor: BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+			topBarCustomColor: BOARDSPACE_DEFAULT_CUSTOM_COLOR,
 			w: BOARD_TODO_DEFAULT_WIDTH,
 		};
 	}
@@ -298,19 +306,42 @@ function BoardTodoShapeView({ shape }: { shape: BoardTodoShape }) {
 		() =>
 			getBoardNoteCardStyles(
 				shape.props.color,
+				shape.props.customColor,
 				shape.props.dash,
 				shape.props.fill,
 				isDarkMode,
 			),
-		[isDarkMode, shape.props.color, shape.props.dash, shape.props.fill],
+		[
+			isDarkMode,
+			shape.props.color,
+			shape.props.customColor,
+			shape.props.dash,
+			shape.props.fill,
+		],
 	);
 	const topBarStyles = useMemo(
-		() => getBoardNoteBarStyles(shape.props.topBarColor, isDarkMode),
-		[isDarkMode, shape.props.topBarColor],
+		() =>
+			getBoardNoteBarStyles(
+				shape.props.topBarColor,
+				shape.props.topBarCustomColor,
+				isDarkMode,
+			),
+		[isDarkMode, shape.props.topBarColor, shape.props.topBarCustomColor],
 	);
 	const textColor = useMemo(
-		() => getBoardNoteTextColor(shape.props.color, isDarkMode),
-		[isDarkMode, shape.props.color],
+		() =>
+			getBoardNoteTextColor(
+				shape.props.color,
+				shape.props.customColor,
+				shape.props.fill,
+				isDarkMode,
+			),
+		[
+			isDarkMode,
+			shape.props.color,
+			shape.props.customColor,
+			shape.props.fill,
+		],
 	);
 	const taskTextStyles = useMemo(
 		() =>
@@ -673,8 +704,7 @@ function BoardTodoShapeView({ shape }: { shape: BoardTodoShape }) {
 			>
 				<div
 					className="boardspace-todo-shape__top-bar"
-					data-enabled={shape.props.topBarEnabled ? "true" : "false"}
-					style={shape.props.topBarEnabled ? topBarStyles : undefined}
+					style={topBarStyles}
 				/>
 				<div
 					ref={listRef}
@@ -995,6 +1025,7 @@ function createBoardTodoShapeFromTaskDrop(
 		y: pagePoint.y - nextHeight / 2,
 		props: {
 			color: sourceShape.props.color,
+			customColor: sourceShape.props.customColor,
 			fill: sourceShape.props.fill,
 			h: nextHeight,
 			size: sourceShape.props.size,
@@ -1005,7 +1036,7 @@ function createBoardTodoShapeFromTaskDrop(
 			],
 			title: "",
 			topBarColor: sourceShape.props.topBarColor,
-			topBarEnabled: sourceShape.props.topBarEnabled,
+			topBarCustomColor: sourceShape.props.topBarCustomColor,
 			w: sourceShape.props.w,
 		},
 	});

@@ -2,34 +2,36 @@ import {
 	BaseBoxShapeUtil,
 	createShapePropsMigrationIds,
 	createShapePropsMigrationSequence,
-	DefaultColorStyle,
+	DefaultDashStyle,
+	DefaultFillStyle,
+	DefaultSizeStyle,
 	Editor,
+	FONT_FAMILIES,
 	getColorValue,
 	getDefaultColorTheme,
 	HTMLContainer,
 	isEqual,
+	LABEL_FONT_SIZES,
+	renderHtmlFromRichTextForMeasurement,
+	renderPlaintextFromRichText,
+	RichTextLabel,
 	resizeBox,
 	T,
-	TLResizeInfo,
-	TLShape,
-	useEditor,
-	useIsEditing,
-	useValue,
-} from "@tldraw/editor";
-import {
-	DefaultDashStyle,
-	DefaultFillStyle,
-	DefaultSizeStyle,
-	StyleProp,
-	TLDefaultColorStyle,
 	TLDefaultDashStyle,
 	TLDefaultFillStyle,
 	TLDefaultSizeStyle,
 	TLRichText,
+	TLResizeInfo,
+	TLShape,
+	TEXT_PROPS,
 	defaultColorNames,
 	richTextValidator,
 	toRichText,
-} from "@tldraw/tlschema";
+	useEditor,
+	useIsEditing,
+	useValue,
+	StyleProp,
+} from "tldraw";
 import {
 	CSSProperties,
 	useEffect,
@@ -37,14 +39,6 @@ import {
 	useMemo,
 	useRef,
 } from "react";
-import {
-	FONT_FAMILIES,
-	LABEL_FONT_SIZES,
-	RichTextLabel,
-	TEXT_PROPS,
-	renderHtmlFromRichTextForMeasurement,
-	renderPlaintextFromRichText,
-} from "tldraw";
 import {
 	BOARD_NOTE_DEFAULT_WIDTH,
 	BOARD_NOTE_MIN_HEIGHT,
@@ -57,17 +51,59 @@ import {
 	startBoardColumnDrag,
 	useBoardColumnDragState,
 } from "./board-column-drag-state";
+import {
+	isBoardspaceMediaCaptionShape,
+	isBoardspaceMediaShape,
+	removeBoardspaceMediaCaption,
+} from "./boardspace-media-caption";
 
 export type BoardNoteShape = Extract<TLShape, { type: "board-note" }>;
+export const BOARDSPACE_CUSTOM_COLOR = "custom" as const;
+export const BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR = "transparent" as const;
+export const BOARDSPACE_DEFAULT_CUSTOM_COLOR = "#6b7280";
+const BOARDSPACE_COLOR_VALUES = [
+	...defaultColorNames,
+	BOARDSPACE_CUSTOM_COLOR,
+] as const;
+const BOARD_NOTE_TOP_BAR_COLOR_VALUES = [
+	...defaultColorNames,
+	BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+	BOARDSPACE_CUSTOM_COLOR,
+] as const;
+export type BoardspaceColor = (typeof BOARDSPACE_COLOR_VALUES)[number];
+export type BoardNoteTopBarColor =
+	(typeof BOARD_NOTE_TOP_BAR_COLOR_VALUES)[number];
 
 const BOARD_NOTE_PADDING = 16;
 const BOARD_NOTE_MEASUREMENT_FUZZ = 1;
 
+export const BoardspaceColorStyle = StyleProp.defineEnum(
+	"boardspace:color",
+	{
+		defaultValue: "black",
+		values: BOARDSPACE_COLOR_VALUES,
+	},
+);
+export const BoardspaceCustomColorStyle = StyleProp.define(
+	"boardspace:custom-color",
+	{
+		defaultValue: BOARDSPACE_DEFAULT_CUSTOM_COLOR,
+		type: T.string,
+	},
+);
+
 export const BoardNoteTopBarColorStyle = StyleProp.defineEnum(
 	"boardspace:top-bar-color",
 	{
-		defaultValue: "black",
-		values: defaultColorNames,
+		defaultValue: BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+		values: BOARD_NOTE_TOP_BAR_COLOR_VALUES,
+	},
+);
+export const BoardNoteTopBarCustomColorStyle = StyleProp.define(
+	"boardspace:top-bar-custom-color",
+	{
+		defaultValue: BOARDSPACE_DEFAULT_CUSTOM_COLOR,
+		type: T.string,
 	},
 );
 
@@ -85,8 +121,9 @@ const boardNoteShapeMigrations = createShapePropsMigrationSequence({
 			id: boardNoteShapeVersions.AddColor,
 			up: (props) => {
 				props.color = "black";
+				props.customColor = BOARDSPACE_DEFAULT_CUSTOM_COLOR;
 			},
-			down: ({ color: _color, ...props }) => props,
+			down: ({ color: _color, customColor: _customColor, ...props }) => props,
 		},
 		{
 			id: boardNoteShapeVersions.AddMinHeight,
@@ -98,12 +135,14 @@ const boardNoteShapeMigrations = createShapePropsMigrationSequence({
 		{
 			id: boardNoteShapeVersions.AddTopBar,
 			up: (props) => {
-				props.topBarColor =
-					typeof props.color === "string" ? props.color : "black";
-				props.topBarEnabled = false;
+				props.topBarColor = BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR;
+				props.topBarCustomColor = BOARDSPACE_DEFAULT_CUSTOM_COLOR;
 			},
-			down: ({ topBarColor: _topBarColor, topBarEnabled: _topBarEnabled, ...props }) =>
-				props,
+			down: ({
+				topBarColor: _topBarColor,
+				topBarCustomColor: _topBarCustomColor,
+				...props
+			}) => props,
 		},
 		{
 			id: boardNoteShapeVersions.UseRichText,
@@ -124,6 +163,8 @@ const boardNoteShapeMigrations = createShapePropsMigrationSequence({
 			id: boardNoteShapeVersions.AddDash,
 			up: (props) => {
 				props.dash = "solid";
+				props.customColor ??= BOARDSPACE_DEFAULT_CUSTOM_COLOR;
+				props.topBarCustomColor ??= BOARDSPACE_DEFAULT_CUSTOM_COLOR;
 			},
 			down: ({ dash: _dash, ...props }) => props,
 		},
@@ -134,7 +175,8 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 	static override type = "board-note" as const;
 
 	static override props = {
-		color: DefaultColorStyle,
+		color: BoardspaceColorStyle,
+		customColor: BoardspaceCustomColorStyle,
 		dash: DefaultDashStyle,
 		fill: DefaultFillStyle,
 		h: T.number,
@@ -142,7 +184,7 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 		richText: richTextValidator,
 		size: DefaultSizeStyle,
 		topBarColor: BoardNoteTopBarColorStyle,
-		topBarEnabled: T.boolean,
+		topBarCustomColor: BoardNoteTopBarCustomColorStyle,
 		w: T.number,
 	};
 
@@ -155,14 +197,15 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 	override getDefaultProps(): BoardNoteShape["props"] {
 		return {
 			color: "black",
+			customColor: BOARDSPACE_DEFAULT_CUSTOM_COLOR,
 			dash: "solid",
 			fill: "semi",
 			h: BOARD_NOTE_MIN_HEIGHT,
 			minH: BOARD_NOTE_MIN_HEIGHT,
 			richText: toRichText(""),
 			size: "m",
-			topBarColor: "black",
-			topBarEnabled: false,
+			topBarColor: BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+			topBarCustomColor: BOARDSPACE_DEFAULT_CUSTOM_COLOR,
 			w: BOARD_NOTE_DEFAULT_WIDTH,
 		};
 	}
@@ -292,6 +335,15 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 	);
 	const isInColumn = Boolean(parentColumn);
 	const isInCollapsedColumn = Boolean(parentColumn?.props.collapsed);
+	const parentMedia = useValue(
+		"board-note-parent-media",
+		() => {
+			const parent = editor.getShape(shape.parentId);
+			return isBoardspaceMediaShape(parent) ? parent : null;
+		},
+		[editor, shape.parentId],
+	);
+	const isInMediaParent = Boolean(parentMedia);
 	const isDraggedBoardColumnNote =
 		dragState.draggedShapeId === shape.id && editor.isIn("select.translating");
 	const isDarkMode = useValue(
@@ -313,19 +365,42 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 		() =>
 			getBoardNoteCardStyles(
 				shape.props.color,
+				shape.props.customColor,
 				shape.props.dash,
 				shape.props.fill,
 				isDarkMode,
 			),
-		[isDarkMode, shape.props.color, shape.props.dash, shape.props.fill],
+		[
+			isDarkMode,
+			shape.props.color,
+			shape.props.customColor,
+			shape.props.dash,
+			shape.props.fill,
+		],
 	);
 	const topBarStyles = useMemo(
-		() => getBoardNoteBarStyles(shape.props.topBarColor, isDarkMode),
-		[isDarkMode, shape.props.topBarColor],
+		() =>
+			getBoardNoteBarStyles(
+				shape.props.topBarColor,
+				shape.props.topBarCustomColor,
+				isDarkMode,
+			),
+		[isDarkMode, shape.props.topBarColor, shape.props.topBarCustomColor],
 	);
 	const textColor = useMemo(
-		() => getBoardNoteTextColor(shape.props.color, isDarkMode),
-		[isDarkMode, shape.props.color],
+		() =>
+			getBoardNoteTextColor(
+				shape.props.color,
+				shape.props.customColor,
+				shape.props.fill,
+				isDarkMode,
+			),
+		[
+			isDarkMode,
+			shape.props.color,
+			shape.props.customColor,
+			shape.props.fill,
+		],
 	);
 	const placeholderStyles = useMemo(
 		() =>
@@ -336,11 +411,36 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 			}) as CSSProperties,
 		[shape.props.size],
 	);
+	const handleKeyDown = useMemo(() => {
+		if (!isBoardspaceMediaCaptionShape(shape) || !parentMedia) {
+			return undefined;
+		}
+
+		return (event: KeyboardEvent) => {
+			if (
+				event.key !== "Backspace" ||
+				event.metaKey ||
+				event.ctrlKey ||
+				event.altKey ||
+				event.shiftKey
+			) {
+				return;
+			}
+
+			if (text.trim().length > 0) {
+				return;
+			}
+
+			event.preventDefault();
+			removeBoardspaceMediaCaption(editor, parentMedia.id);
+		};
+	}, [editor, parentMedia, shape, text]);
 
 	return (
 		<HTMLContainer
 			className="boardspace-note-shape"
 			data-in-column={isInColumn ? "true" : "false"}
+			data-in-media-parent={isInMediaParent ? "true" : "false"}
 			data-dragging={isDraggedBoardColumnNote ? "true" : "false"}
 			style={{
 				height: shape.props.h,
@@ -357,14 +457,21 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 				className="boardspace-note-shape__inner"
 				data-editing={isEditing ? "true" : "false"}
 				data-in-column={isInColumn ? "true" : "false"}
+				data-in-media-parent={isInMediaParent ? "true" : "false"}
 				style={cardStyles}
 			>
-				{shape.props.topBarEnabled ? (
-					<div
-						className="boardspace-note-shape__top-bar"
-						style={topBarStyles}
-					/>
-				) : null}
+				<div
+					className="boardspace-note-shape__top-bar"
+					style={
+						isInMediaParent && parentMedia
+							? {
+									...topBarStyles,
+									pointerEvents: "none",
+									top: -parentMedia.props.h,
+							  }
+							: topBarStyles
+					}
+				/>
 				{!hasContent && !isEditing ? (
 					<div
 						className="boardspace-note-shape__placeholder"
@@ -389,6 +496,7 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 							padding={0}
 							classNamePrefix="boardspace-note-shape__text"
 							showTextOutline={false}
+							onKeyDown={handleKeyDown}
 						/>
 					</div>
 				)}
@@ -398,13 +506,19 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 }
 
 export function getBoardNoteCardStyles(
-	color: TLDefaultColorStyle,
+	color: BoardspaceColor,
+	customColor: string,
 	dash: TLDefaultDashStyle,
 	fill: TLDefaultFillStyle,
 	isDarkMode: boolean,
 ) : CSSProperties {
 	const theme = getDefaultColorTheme({ isDarkMode });
-	const patternColor = getColorValue(theme, color, "pattern");
+	const patternColor = getBoardspaceColorValue(
+		color,
+		customColor,
+		isDarkMode,
+		"pattern",
+	);
 	const borderColor = isDarkMode
 		? "rgba(255, 255, 255, 0.16)"
 		: "rgba(0, 0, 0, 0.14)";
@@ -415,7 +529,9 @@ export function getBoardNoteCardStyles(
 
 	return {
 		backgroundColor:
-			fill === "none" ? "transparent" : getColorValue(theme, color, baseFill),
+			fill === "none"
+				? "transparent"
+				: getBoardspaceColorValue(color, customColor, isDarkMode, baseFill),
 		backgroundImage:
 			fill === "pattern"
 				? `linear-gradient(45deg, ${patternColor} 12.5%, transparent 12.5%, transparent 50%, ${patternColor} 50%, ${patternColor} 62.5%, transparent 62.5%, transparent 100%)`
@@ -442,9 +558,17 @@ export function getBoardNoteCardStyles(
 }
 
 export function getBoardNoteTextColor(
-	color: TLDefaultColorStyle,
+	color: BoardspaceColor,
+	customColor: string,
+	fill: TLDefaultFillStyle,
 	isDarkMode: boolean,
 ) {
+	if (color === BOARDSPACE_CUSTOM_COLOR) {
+		return fill === "fill"
+			? getBoardspaceReadableTextColor(customColor)
+			: "var(--text-normal)";
+	}
+
 	const theme = getDefaultColorTheme({ isDarkMode });
 	return getColorValue(theme, color, "noteText");
 }
@@ -458,13 +582,80 @@ function shouldSnapBoardNoteWidth(info: TLResizeInfo<BoardNoteShape>) {
 }
 
 export function getBoardNoteBarStyles(
-	color: TLDefaultColorStyle,
+	color: BoardNoteTopBarColor,
+	customColor: string,
 	isDarkMode: boolean,
 ): CSSProperties {
+	if (color === BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR) {
+		return {
+			backgroundColor: "transparent",
+		};
+	}
+
+	if (color === BOARDSPACE_CUSTOM_COLOR) {
+		return {
+			backgroundColor: normalizeBoardspaceCustomColor(customColor),
+		};
+	}
+
 	const theme = getDefaultColorTheme({ isDarkMode });
 
 	return {
 		backgroundColor: getColorValue(theme, color, "solid"),
+	};
+}
+
+export function normalizeBoardspaceCustomColor(value: string | undefined) {
+	return /^#[0-9a-f]{6}$/i.test(value ?? "")
+		? value!
+		: BOARDSPACE_DEFAULT_CUSTOM_COLOR;
+}
+
+export function getBoardspaceColorValue(
+	color: BoardspaceColor,
+	customColor: string,
+	isDarkMode: boolean,
+	variant: "fill" | "solid" | "semi" | "pattern" | "noteText",
+) {
+	if (color !== BOARDSPACE_CUSTOM_COLOR) {
+		const theme = getDefaultColorTheme({ isDarkMode });
+		return getColorValue(theme, color, variant);
+	}
+
+	const normalizedColor = normalizeBoardspaceCustomColor(customColor);
+
+	switch (variant) {
+		case "fill":
+		case "solid":
+			return normalizedColor;
+		case "semi":
+			return withAlpha(normalizedColor, isDarkMode ? 0.28 : 0.18);
+		case "pattern":
+			return withAlpha(normalizedColor, isDarkMode ? 0.42 : 0.28);
+		case "noteText":
+			return getBoardspaceReadableTextColor(normalizedColor);
+	}
+}
+
+function getBoardspaceReadableTextColor(color: string) {
+	const { r, g, b } = hexToRgb(normalizeBoardspaceCustomColor(color));
+	const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+	return luminance > 0.6 ? "#111827" : "#f8fafc";
+}
+
+function withAlpha(color: string, alpha: number) {
+	const { r, g, b } = hexToRgb(normalizeBoardspaceCustomColor(color));
+	return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function hexToRgb(color: string) {
+	const normalizedColor = normalizeBoardspaceCustomColor(color).slice(1);
+
+	return {
+		r: Number.parseInt(normalizedColor.slice(0, 2), 16),
+		g: Number.parseInt(normalizedColor.slice(2, 4), 16),
+		b: Number.parseInt(normalizedColor.slice(4, 6), 16),
 	};
 }
 

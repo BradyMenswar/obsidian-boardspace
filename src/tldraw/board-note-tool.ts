@@ -1,5 +1,4 @@
 import {
-	DefaultColorStyle,
 	DefaultFillStyle,
 	DefaultSizeStyle,
 	StateNode,
@@ -13,7 +12,13 @@ import {
 	BOARD_NOTE_MIN_HEIGHT,
 	BOARD_NOTE_DEFAULT_WIDTH,
 } from "./board-note-config";
-import { BoardNoteShape } from "./board-note-shape";
+import {
+	BoardNoteTopBarColorStyle,
+	BoardNoteTopBarCustomColorStyle,
+	BoardspaceColorStyle,
+	BoardspaceCustomColorStyle,
+	BoardNoteShape,
+} from "./board-note-shape";
 
 export class BoardNoteTool extends StateNode {
 	static override id = "note";
@@ -57,7 +62,8 @@ export function createBoardNoteShapeAtPoint(
 		x: center.x - BOARD_NOTE_DEFAULT_WIDTH / 2,
 		y: center.y - BOARD_NOTE_MIN_HEIGHT / 2,
 		props: {
-			color: editor.getStyleForNextShape(DefaultColorStyle),
+			color: editor.getStyleForNextShape(BoardspaceColorStyle),
+			customColor: editor.getStyleForNextShape(BoardspaceCustomColorStyle),
 			fill:
 				editor.getCurrentToolId() === "note"
 					? editor.getStyleForNextShape(DefaultFillStyle)
@@ -66,8 +72,10 @@ export function createBoardNoteShapeAtPoint(
 			minH: BOARD_NOTE_MIN_HEIGHT,
 			richText: toRichText(""),
 			size: editor.getStyleForNextShape(DefaultSizeStyle),
-			topBarColor: editor.getStyleForNextShape(DefaultColorStyle),
-			topBarEnabled: false,
+			topBarColor: editor.getStyleForNextShape(BoardNoteTopBarColorStyle),
+			topBarCustomColor: editor.getStyleForNextShape(
+				BoardNoteTopBarCustomColorStyle,
+			),
 			w: BOARD_NOTE_DEFAULT_WIDTH,
 		},
 	});

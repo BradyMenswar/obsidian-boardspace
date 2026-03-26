@@ -1,12 +1,13 @@
 import {
 	Editor,
+	TLDefaultSizeStyle,
 	TLParentId,
 	TLShape,
 	TLShapeId,
 	TLShapePartial,
 	ZERO_INDEX_KEY,
 	getIndexAbove,
-} from "@tldraw/editor";
+} from "tldraw";
 import {
 	BOARD_COLUMN_BODY_GAP,
 	BOARD_COLUMN_CHILD_GAP,
@@ -15,13 +16,24 @@ import {
 	getBoardColumnBodyTop,
 	BOARD_COLUMN_SHELL_PADDING_BOTTOM,
 } from "./board-column-config";
+import { BOARD_NOTE_MIN_HEIGHT } from "./board-note-config";
 import { BoardNoteShape, getBoardNoteMeasuredHeight } from "./board-note-shape";
+import { BoardSwatchShape } from "./board-swatch-shape";
 import { BoardTodoShape, getBoardTodoMeasuredHeight } from "./board-todo-shape";
-import { TLDefaultSizeStyle } from "@tldraw/tlschema";
-
+import {
+	BoardspaceMediaShape,
+	getBoardspaceMediaCaptionHeight,
+	getBoardspaceMediaCaptionShape,
+	getBoardspaceMediaCardHeight,
+	isBoardspaceMediaCaptionShape,
+	isBoardspaceMediaShape,
+} from "./boardspace-media-caption";
 const COLUMN_ALLOWED_SHAPE_TYPES = new Set<TLShape["type"]>([
 	"board-note",
+	"board-swatch",
 	"board-todo",
+	"image",
+	"video",
 ]);
 
 type BoardColumnCounterKind = "board" | "card";
@@ -99,6 +111,22 @@ export function getBoardColumnLayoutResult(
 		if (shape.type === "board-todo") {
 			const nextShape = getNormalizedBoardTodoShape(editor, shape, innerWidth, nextY);
 			updates.push(nextShape.update);
+			nextY += nextShape.height;
+			nextY += BOARD_COLUMN_CHILD_GAP;
+			continue;
+		}
+
+		if (shape.type === "board-swatch") {
+			const nextShape = getNormalizedBoardSwatchShape(shape, innerWidth, nextY);
+			updates.push(nextShape.update);
+			nextY += nextShape.height;
+			nextY += BOARD_COLUMN_CHILD_GAP;
+			continue;
+		}
+
+		if (isBoardspaceMediaShape(shape)) {
+			const nextShape = getNormalizedBoardMediaShape(editor, shape, innerWidth, nextY);
+			updates.push(...nextShape.updates);
 			nextY += nextShape.height;
 			nextY += BOARD_COLUMN_CHILD_GAP;
 		}
@@ -190,10 +218,12 @@ export function getBoardColumnInsertionIndicatorY(
 		return getBoardColumnBodyTop(size) + BOARD_COLUMN_CHILD_GAP / 2;
 	}
 
-	const draggedCenterY = draggedShape.y + getBoardColumnCardHeight(draggedShape) / 2;
+	const draggedCenterY =
+		draggedShape.y + getBoardColumnCardHeight(draggedShape, editor) / 2;
 
 	for (const sibling of siblings) {
-		const siblingCenterY = sibling.y + getBoardColumnCardHeight(sibling) / 2;
+		const siblingCenterY =
+			sibling.y + getBoardColumnCardHeight(sibling, editor) / 2;
 		if (draggedCenterY < siblingCenterY) {
 			return Math.max(
 				getBoardColumnBodyTop(size),
@@ -207,7 +237,11 @@ export function getBoardColumnInsertionIndicatorY(
 		return getBoardColumnBodyTop(size) + BOARD_COLUMN_CHILD_GAP / 2;
 	}
 
-	return lastSibling.y + getBoardColumnCardHeight(lastSibling) + BOARD_COLUMN_CHILD_GAP / 2;
+	return (
+		lastSibling.y +
+		getBoardColumnCardHeight(lastSibling, editor) +
+		BOARD_COLUMN_CHILD_GAP / 2
+	);
 }
 
 export function getAffectedBoardColumnIdsForShapeChange(
@@ -229,6 +263,22 @@ export function getAffectedBoardColumnIdsForShapeChange(
 		const parent = editor.getShape(shape.parentId);
 		if (parent?.type === "board-column") {
 			affected.add(parent.id);
+			continue;
+		}
+
+		if (isBoardspaceMediaCaptionShape(shape) && isBoardspaceMediaShape(parent)) {
+			const column = editor.getShape(parent.parentId);
+			if (column?.type === "board-column") {
+				affected.add(column.id);
+			}
+			continue;
+		}
+
+		if (isBoardspaceMediaShape(shape)) {
+			const column = editor.getShape(shape.parentId);
+			if (column?.type === "board-column") {
+				affected.add(column.id);
+			}
 		}
 	}
 
@@ -236,7 +286,15 @@ export function getAffectedBoardColumnIdsForShapeChange(
 }
 
 function getBoardColumnCounterKind(shape: TLShape): BoardColumnCounterKind | undefined {
-	if (shape.type === "board-note" || shape.type === "board-todo") {
+	if (
+		shape.type === "board-note" ||
+		shape.type === "board-swatch" ||
+		shape.type === "board-todo"
+	) {
+		return "card";
+	}
+
+	if (isBoardspaceMediaShape(shape)) {
 		return "card";
 	}
 
@@ -304,12 +362,104 @@ function getNormalizedBoardTodoShape(
 	};
 }
 
-function isBoardColumnCardShape(
-	shape: TLShape,
-): shape is BoardNoteShape | BoardTodoShape {
-	return shape.type === "board-note" || shape.type === "board-todo";
+function getNormalizedBoardSwatchShape(
+	shape: BoardSwatchShape,
+	width: number,
+	y: number,
+): { height: number; update: TLShapePartial<BoardSwatchShape> } {
+	return {
+		height: shape.props.h,
+		update: {
+			id: shape.id,
+			type: shape.type,
+			x: BOARD_COLUMN_PADDING,
+			y,
+			props: {
+				h: shape.props.h,
+				w: width,
+			},
+		},
+	};
 }
 
-function getBoardColumnCardHeight(shape: BoardNoteShape | BoardTodoShape) {
+function isBoardColumnCardShape(
+	shape: TLShape,
+) : shape is BoardNoteShape | BoardSwatchShape | BoardTodoShape | BoardspaceMediaShape {
+	return (
+		shape.type === "board-note" ||
+		shape.type === "board-swatch" ||
+		shape.type === "board-todo" ||
+		isBoardspaceMediaShape(shape)
+	);
+}
+
+function getBoardColumnCardHeight(
+	shape: BoardNoteShape | BoardSwatchShape | BoardTodoShape | BoardspaceMediaShape,
+	editor?: Editor,
+) {
+	if (isBoardspaceMediaShape(shape)) {
+		return editor ? getBoardspaceMediaCardHeight(editor, shape) : shape.props.h;
+	}
+
 	return shape.props.h;
+}
+
+function getNormalizedBoardMediaShape(
+	editor: Editor,
+	shape: BoardspaceMediaShape,
+	width: number,
+	y: number,
+): { height: number; updates: TLShapePartial[] } {
+	const mediaHeight =
+		shape.props.w > 0 ? (width / shape.props.w) * shape.props.h : shape.props.h;
+	const captionShape = getBoardspaceMediaCaptionShape(editor, shape.id);
+	const updates: TLShapePartial[] = [
+		{
+			id: shape.id,
+			type: shape.type,
+			x: BOARD_COLUMN_PADDING,
+			y,
+			props: {
+				h: mediaHeight,
+				w: width,
+			},
+		},
+	];
+
+	if (!captionShape) {
+		return {
+			height: mediaHeight,
+			updates,
+		};
+	}
+
+	const captionHeight = getBoardspaceMediaCaptionHeight(
+		editor,
+		{
+			...shape,
+			props: {
+				...shape.props,
+				h: mediaHeight,
+				w: width,
+			},
+		} as BoardspaceMediaShape,
+		captionShape,
+	);
+
+	updates.push({
+		id: captionShape.id,
+		type: captionShape.type,
+		x: 0,
+		y: mediaHeight,
+		props: {
+			h: captionHeight,
+			minH: BOARD_NOTE_MIN_HEIGHT,
+			w: width,
+		},
+	});
+
+	return {
+		height: mediaHeight + captionHeight,
+		updates,
+	};
 }

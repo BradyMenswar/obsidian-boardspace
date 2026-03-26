@@ -7,35 +7,47 @@ import type {
 	TLRichText,
 } from "@tldraw/tlschema";
 
+type BoardspaceShapeColor = TLDefaultColorStyle | "custom";
+type BoardspaceTopBarColor = TLDefaultColorStyle | "transparent" | "custom";
+
 declare module "@tldraw/tlschema" {
 	interface TLGlobalShapePropsMap {
 		"board-column": {
 			collapsed: boolean;
-			color: TLDefaultColorStyle;
+			color: BoardspaceShapeColor;
+			customColor: string;
 			dash: TLDefaultDashStyle;
 			fill: TLDefaultFillStyle;
 			h: number;
 			minH: number;
 			size: TLDefaultSizeStyle;
 			title: string;
-			topBarColor: TLDefaultColorStyle;
-			topBarEnabled: boolean;
+			topBarColor: BoardspaceTopBarColor;
+			topBarCustomColor: string;
 			w: number;
 		};
 		"board-note": {
-			color: TLDefaultColorStyle;
+			color: BoardspaceShapeColor;
+			customColor: string;
 			dash: TLDefaultDashStyle;
 			fill: TLDefaultFillStyle;
 			h: number;
 			minH: number;
 			richText: TLRichText;
 			size: TLDefaultSizeStyle;
-			topBarColor: TLDefaultColorStyle;
-			topBarEnabled: boolean;
+			topBarColor: BoardspaceTopBarColor;
+			topBarCustomColor: string;
+			w: number;
+		};
+		"board-swatch": {
+			colorValue: string;
+			h: number;
+			labelMode: "none" | "hex" | "rgb" | "hsl";
 			w: number;
 		};
 		"board-todo": {
-			color: TLDefaultColorStyle;
+			color: BoardspaceShapeColor;
+			customColor: string;
 			dash: TLDefaultDashStyle;
 			fill: TLDefaultFillStyle;
 			h: number;
@@ -46,8 +58,8 @@ declare module "@tldraw/tlschema" {
 				text: string;
 			}>;
 			title: string;
-			topBarColor: TLDefaultColorStyle;
-			topBarEnabled: boolean;
+			topBarColor: BoardspaceTopBarColor;
+			topBarCustomColor: string;
 			w: number;
 		};
 	}

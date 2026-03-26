@@ -1,5 +1,4 @@
-import { TLDefaultSizeStyle } from "@tldraw/tlschema";
-import { LABEL_FONT_SIZES } from "tldraw";
+import { LABEL_FONT_SIZES, TLDefaultSizeStyle } from "tldraw";
 
 export const BOARD_COLUMN_DEFAULT_WIDTH = 360;
 export const BOARD_COLUMN_DEFAULT_HEIGHT = 240;

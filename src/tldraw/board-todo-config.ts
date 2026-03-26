@@ -1,5 +1,4 @@
-import { TLDefaultSizeStyle } from "@tldraw/tlschema";
-import { LABEL_FONT_SIZES } from "tldraw";
+import { LABEL_FONT_SIZES, TLDefaultSizeStyle } from "tldraw";
 
 export const BOARD_TODO_DEFAULT_WIDTH = 320;
 export const BOARD_TODO_MIN_WIDTH = 220;

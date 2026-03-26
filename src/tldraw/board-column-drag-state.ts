@@ -1,5 +1,5 @@
-import { TLShapeId } from "@tldraw/editor";
-import { IndexKey } from "@tldraw/utils";
+import type { IndexKey } from "@tldraw/utils";
+import type { TLShapeId } from "tldraw";
 import { useSyncExternalStore } from "react";
 
 export interface BoardColumnDragState {
