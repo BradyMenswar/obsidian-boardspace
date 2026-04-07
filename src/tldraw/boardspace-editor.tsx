@@ -1,5 +1,6 @@
 import { TFile } from "obsidian";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useApp } from "hooks/use-app";
 import {
 	ArrowShapeTool,
 	DefaultHelperButtonsContent,
@@ -101,6 +102,7 @@ import {
 } from "./boardspace-media-caption";
 import { BoardspaceToolbar } from "./boardspace-toolbar";
 import { BoardspaceZoomMenu } from "./boardspace-zoom-menu";
+import { createBoardspaceAssetStore } from "./boardspace-asset-store";
 import {
 	preventTldrawCanvasesCausingObsidianGestures,
 	replaceCanvasDoubleClickWithBoardNote,
@@ -110,6 +112,7 @@ import {
 
 interface BoardspaceEditorProps {
 	file: TFile | null;
+	isActive: boolean;
 	loadKey: string;
 	onSnapshotChange?: (snapshot: TLEditorSnapshot) => void;
 	snapshot?: TLEditorSnapshot;
@@ -191,6 +194,7 @@ const BOARDSPACE_COLOR_VALUES = [
 
 export function BoardspaceEditor({
 	file,
+	isActive,
 	loadKey,
 	onSnapshotChange,
 	snapshot,
@@ -199,6 +203,7 @@ export function BoardspaceEditor({
 		<BoardspaceCanvasToneProvider>
 			<BoardspaceEditorInner
 				file={file}
+				isActive={isActive}
 				loadKey={loadKey}
 				onSnapshotChange={onSnapshotChange}
 				snapshot={snapshot}
@@ -209,13 +214,34 @@ export function BoardspaceEditor({
 
 function BoardspaceEditorInner({
 	file,
+	isActive,
 	loadKey,
 	onSnapshotChange,
 	snapshot,
 }: BoardspaceEditorProps) {
+	const app = useApp();
 	const { currentTone } = useBoardspaceCanvasTone();
+	const [editor, setEditor] = useState<Editor | null>(null);
+	const assetStore = useMemo(
+		() => createBoardspaceAssetStore(app, file),
+		[app, file],
+	);
+
+	useLayoutEffect(() => {
+		if (!editor) {
+			return;
+		}
+
+		if (isActive) {
+			editor.focus();
+			return;
+		}
+
+		editor.blur();
+	}, [editor, isActive]);
 
 	const handleMount = (editor: Editor) => {
+		setEditor(editor);
 		normalizeToSinglePage(editor);
 		syncTldrawThemeWithObsidian();
 		editor.updateInstanceState({ isGridMode: true });
@@ -238,6 +264,9 @@ function BoardspaceEditorInner({
 		);
 
 		return () => {
+			setEditor((currentEditor) =>
+				currentEditor === editor ? null : currentEditor,
+			);
 			stopWatchingTheme();
 			cleanupGestures?.();
 			cleanupDoubleClick?.();
@@ -254,7 +283,8 @@ function BoardspaceEditorInner({
 			data-canvas-tone={currentTone}
 		>
 			<Tldraw
-				autoFocus={false}
+				assets={assetStore}
+				autoFocus={isActive}
 				components={BOARDSPACE_COMPONENTS}
 				initialState="select"
 				key={loadKey}

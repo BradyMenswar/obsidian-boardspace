@@ -7,7 +7,7 @@ import { registerBoardspaceAutoOpen } from "workspace/auto-open-boardspace";
 
 export default class BoardspacePlugin extends Plugin {
 	async onload() {
-		this.registerView(BOARDSPACE_VIEW_TYPE, (leaf) => new BoardView(leaf));
+		this.registerView(BOARDSPACE_VIEW_TYPE, (leaf) => new BoardView(this, leaf));
 		registerBoardspaceAutoOpen(this);
 
 		this.addCommand({

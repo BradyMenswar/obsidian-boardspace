@@ -1,20 +1,25 @@
 import { AppContext } from "context/app-context";
 import { parseBoardspaceFile, serializeBoardspaceFile } from "files/boardspace-file";
 import { TLEditorSnapshot } from "tldraw";
-import { TextFileView, WorkspaceLeaf } from "obsidian";
+import { Menu, TextFileView, WorkspaceLeaf } from "obsidian";
 import { Root, createRoot } from "react-dom/client";
 import { BOARDSPACE_VIEW_TYPE } from "types/board";
 import { BoardspaceEditor } from "tldraw/boardspace-editor";
+import type BoardspacePlugin from "main";
+import { openBoardspaceFileAsMarkdown } from "workspace/auto-open-boardspace";
 
 export class BoardView extends TextFileView {
+	private readonly plugin: BoardspacePlugin;
 	root: Root | null = null;
 	private reactHost: HTMLDivElement | null = null;
+	private isLeafActive = false;
 	private renderVersion = 0;
 	private saveTimer: number | null = null;
 	private snapshot: TLEditorSnapshot | undefined;
 
-	constructor(leaf: WorkspaceLeaf) {
+	constructor(plugin: BoardspacePlugin, leaf: WorkspaceLeaf) {
 		super(leaf);
+		this.plugin = plugin;
 	}
 
 	clear() {
@@ -43,13 +48,51 @@ export class BoardView extends TextFileView {
 		return extension === "md";
 	}
 
+	onPaneMenu(menu: Menu, source: "more-options" | "tab-header" | string) {
+		super.onPaneMenu(menu, source);
+
+		if (!this.file) {
+			return;
+		}
+
+		menu.addItem((item) =>
+			item
+				.setTitle("Open as markdown")
+				.setIcon("document")
+				.onClick(() => {
+					if (!this.file) {
+						return;
+					}
+
+					void openBoardspaceFileAsMarkdown(
+						this.plugin,
+						this.file,
+						this.leaf,
+					);
+				}),
+		);
+	}
+
 	async onOpen() {
 		this.contentEl.empty();
 		this.contentEl.addClass("boardspace-view");
 		this.contentEl.style.padding = "0";
+		this.isLeafActive = this.app.workspace.activeLeaf === this.leaf;
 		this.reactHost = this.contentEl.createDiv({
 			cls: "boardspace-view__root",
 		});
+
+		this.registerEvent(
+			this.app.workspace.on("active-leaf-change", (leaf) => {
+				const nextIsActive = leaf === this.leaf;
+				if (nextIsActive === this.isLeafActive) {
+					return;
+				}
+
+				this.isLeafActive = nextIsActive;
+				this.renderView();
+			}),
+		);
 
 		this.root = createRoot(this.reactHost);
 		this.renderView();
@@ -74,6 +117,7 @@ export class BoardView extends TextFileView {
 			<AppContext.Provider value={this.app}>
 				<BoardspaceEditor
 					file={this.file}
+					isActive={this.isLeafActive}
 					loadKey={`${this.file?.path ?? "boardspace"}:${this.renderVersion}`}
 					onSnapshotChange={this.handleSnapshotChange}
 					snapshot={this.snapshot}
