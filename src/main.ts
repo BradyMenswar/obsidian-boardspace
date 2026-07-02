@@ -12,19 +12,17 @@ export default class BoardspacePlugin extends Plugin {
 
 		this.addCommand({
 			id: "open-current-file-as-boardspace-board",
-			name: "Open current file as Boardspace",
+			name: "Open current file as board",
 			checkCallback: (checking) =>
 				openCurrentFileAsBoardspace(this.app, checking),
 		});
 
 		this.addCommand({
 			id: "create-new-boardspace",
-			name: "Create new Boardspace",
-			callback: async () => createNewBoardspace(this.app),
+			name: "Create new board",
+			callback: () => {
+				void createNewBoardspace(this.app);
+			},
 		});
-	}
-
-	async onunload() {
-		this.app.workspace.detachLeavesOfType(BOARDSPACE_VIEW_TYPE);
 	}
 }

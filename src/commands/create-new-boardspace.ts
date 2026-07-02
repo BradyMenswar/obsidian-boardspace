@@ -2,11 +2,15 @@ import { App, normalizePath } from "obsidian";
 import { activateBoardView } from "./util";
 import { serializeBoardspaceFile } from "files/boardspace-file";
 
-function getUniqueBoardspacePath(app: App, folderPath: string) {
+export function getUniqueBoardspacePath(
+	app: App,
+	folderPath: string,
+	baseName = "Untitled",
+) {
 	let counter = 0;
 
 	while (true) {
-		const filename = counter === 0 ? "Untitled.md" : `Untitled ${counter}.md`;
+		const filename = counter === 0 ? `${baseName}.md` : `${baseName} ${counter}.md`;
 		const path = folderPath
 			? normalizePath(`${folderPath}/${filename}`)
 			: filename;

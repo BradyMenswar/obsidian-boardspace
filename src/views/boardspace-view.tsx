@@ -1,7 +1,11 @@
 import { AppContext } from "context/app-context";
-import { parseBoardspaceFile, serializeBoardspaceFile } from "files/boardspace-file";
+import {
+	isSupportedBoardspaceVersion,
+	parseBoardspaceFileWithMetadata,
+	serializeBoardspaceFile,
+} from "files/boardspace-file";
 import { TLEditorSnapshot } from "tldraw";
-import { Menu, TextFileView, WorkspaceLeaf } from "obsidian";
+import { Menu, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import { Root, createRoot } from "react-dom/client";
 import { BOARDSPACE_VIEW_TYPE } from "types/board";
 import { BoardspaceEditor } from "tldraw/boardspace-editor";
@@ -15,7 +19,11 @@ export class BoardView extends TextFileView {
 	private isLeafActive = false;
 	private renderVersion = 0;
 	private saveTimer: number | null = null;
+	private savePromise: Promise<void> = Promise.resolve();
 	private snapshot: TLEditorSnapshot | undefined;
+	private sourceData = "";
+	private isBoardspaceDocument = false;
+	private hasShownUnsafeSaveNotice = false;
 
 	constructor(plugin: BoardspacePlugin, leaf: WorkspaceLeaf) {
 		super(leaf);
@@ -31,12 +39,24 @@ export class BoardView extends TextFileView {
 	}
 
 	getViewData() {
+		if (!this.isBoardspaceDocument) {
+			return this.sourceData;
+		}
+
 		return serializeBoardspaceFile(this.snapshot);
 	}
 
 	setViewData(data: string, clear: boolean) {
-		this.snapshot = parseBoardspaceFile(data);
+		const { snapshot, version } = parseBoardspaceFileWithMetadata(data);
+		this.sourceData = data;
+		this.isBoardspaceDocument = isSupportedBoardspaceVersion(version);
+		this.snapshot = snapshot;
 		this.renderVersion += 1;
+
+		if (!this.isBoardspaceDocument && data.trim().length > 0) {
+			this.showUnsafeSaveNotice();
+		}
+
 		this.renderView();
 	}
 
@@ -48,7 +68,7 @@ export class BoardView extends TextFileView {
 		return extension === "md";
 	}
 
-	onPaneMenu(menu: Menu, source: "more-options" | "tab-header" | string) {
+	onPaneMenu(menu: Menu, source: string) {
 		super.onPaneMenu(menu, source);
 
 		if (!this.file) {
@@ -77,7 +97,7 @@ export class BoardView extends TextFileView {
 		this.contentEl.empty();
 		this.contentEl.addClass("boardspace-view");
 		this.contentEl.style.padding = "0";
-		this.isLeafActive = this.app.workspace.activeLeaf === this.leaf;
+		this.isLeafActive = this.app.workspace.getLeaf(false) === this.leaf;
 		this.reactHost = this.contentEl.createDiv({
 			cls: "boardspace-view__root",
 		});
@@ -99,7 +119,7 @@ export class BoardView extends TextFileView {
 	}
 
 	async onClose() {
-		this.flushPendingSave();
+		await this.flushPendingSave();
 		this.contentEl.removeClass("boardspace-view");
 		this.contentEl.style.removeProperty("padding");
 		this.root?.unmount();
@@ -127,6 +147,11 @@ export class BoardView extends TextFileView {
 	}
 
 	private readonly handleSnapshotChange = (snapshot: TLEditorSnapshot) => {
+		if (!this.isBoardspaceDocument) {
+			this.showUnsafeSaveNotice();
+			return;
+		}
+
 		this.snapshot = snapshot;
 		this.queueSave();
 	};
@@ -138,17 +163,45 @@ export class BoardView extends TextFileView {
 
 		this.saveTimer = window.setTimeout(() => {
 			this.saveTimer = null;
-			void this.save(false);
+			void this.persistPendingSave();
 		}, 150);
 	}
 
-	private flushPendingSave() {
-		if (this.saveTimer === null) {
+	private async flushPendingSave() {
+		if (this.saveTimer !== null) {
+			window.clearTimeout(this.saveTimer);
+			this.saveTimer = null;
+			await this.persistPendingSave();
 			return;
 		}
 
-		window.clearTimeout(this.saveTimer);
-		this.saveTimer = null;
-		void this.save(false);
+		await this.savePromise;
+	}
+
+	private async persistPendingSave() {
+		if (!this.isBoardspaceDocument) {
+			this.showUnsafeSaveNotice();
+			return;
+		}
+
+		this.savePromise = this.savePromise
+			.then(async () => {
+				await this.save(false);
+			})
+			.catch((error) => {
+				console.error("Boardspace failed to save.", error);
+				new Notice("Boardspace failed to save. Check the developer console for details.");
+			});
+
+		await this.savePromise;
+	}
+
+	private showUnsafeSaveNotice() {
+		if (this.hasShownUnsafeSaveNotice) {
+			return;
+		}
+
+		this.hasShownUnsafeSaveNotice = true;
+		new Notice("Boardspace did not save because this file is not a supported Boardspace note.");
 	}
 }

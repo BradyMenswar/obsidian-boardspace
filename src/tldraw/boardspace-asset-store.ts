@@ -1,4 +1,4 @@
-import { App, TFile } from "obsidian";
+import { App, Notice, TFile } from "obsidian";
 import { TLAsset, TLAssetStore } from "tldraw";
 
 const BOARDSPACE_VAULT_PATH_META_KEY = "boardspaceVaultPath";
@@ -9,22 +9,28 @@ export function createBoardspaceAssetStore(
 ): TLAssetStore {
 	return {
 		async upload(asset: TLAsset, file: File) {
-			const attachmentPath =
-				await app.fileManager.getAvailablePathForAttachment(
-					file.name,
-					boardFile?.path ?? "",
+			try {
+				const attachmentPath =
+					await app.fileManager.getAvailablePathForAttachment(
+						file.name,
+						boardFile?.path ?? "",
+					);
+				const savedFile = await app.vault.createBinary(
+					attachmentPath,
+					await file.arrayBuffer(),
 				);
-			const savedFile = await app.vault.createBinary(
-				attachmentPath,
-				await file.arrayBuffer(),
-			);
 
-			return {
-				meta: {
-					[BOARDSPACE_VAULT_PATH_META_KEY]: savedFile.path,
-				},
-				src: asset.id,
-			};
+				return {
+					meta: {
+						[BOARDSPACE_VAULT_PATH_META_KEY]: savedFile.path,
+					},
+					src: asset.id,
+				};
+			} catch (error) {
+				console.error("Boardspace failed to save an attachment.", error);
+				new Notice("Boardspace could not save that attachment.");
+				throw error;
+			}
 		},
 		resolve(asset) {
 			const vaultPath = asset.meta[BOARDSPACE_VAULT_PATH_META_KEY];

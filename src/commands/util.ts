@@ -10,7 +10,7 @@ export async function activateBoardView(
 ) {
 	const { workspace } = app;
 
-	const targetLeaf = leaf ?? workspace.activeLeaf ?? workspace.getLeaf(true);
+	const targetLeaf = leaf ?? workspace.getLeaf(false);
 
 	await targetLeaf.setViewState({
 		type: BOARDSPACE_VIEW_TYPE,
@@ -18,7 +18,7 @@ export async function activateBoardView(
 		active: true,
 	});
 
-	workspace.revealLeaf(targetLeaf);
+	await workspace.revealLeaf(targetLeaf);
 }
 
 export async function activateMarkdownView(
@@ -28,7 +28,7 @@ export async function activateMarkdownView(
 ) {
 	const { workspace } = app;
 
-	const targetLeaf = leaf ?? workspace.activeLeaf ?? workspace.getLeaf(true);
+	const targetLeaf = leaf ?? workspace.getLeaf(false);
 	const existingState = targetLeaf.getViewState().state;
 	const state =
 		existingState && typeof existingState === "object"
@@ -41,5 +41,5 @@ export async function activateMarkdownView(
 		active: true,
 	});
 
-	workspace.revealLeaf(targetLeaf);
+	await workspace.revealLeaf(targetLeaf);
 }

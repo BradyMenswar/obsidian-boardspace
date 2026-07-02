@@ -1,6 +1,6 @@
 import { Plugin, TFile, ViewState, WorkspaceLeaf } from "obsidian";
 import { activateBoardView, activateMarkdownView, MARKDOWN_VIEW_TYPE } from "commands/util";
-import { isBoardspaceFile } from "files/boardspace-frontmatter";
+import { hasBoardspaceFrontmatter, isBoardspaceFile } from "files/boardspace-frontmatter";
 import { BOARDSPACE_VIEW_TYPE } from "types/board";
 
 const forcedMarkdownPaths = new Set<string>();
@@ -13,11 +13,11 @@ export function registerBoardspaceAutoOpen(plugin: Plugin) {
 				return;
 			}
 
-			void syncActiveLeafAfterFileOpen(
-				plugin,
-				file,
-				plugin.app.workspace.activeLeaf,
-			);
+				void syncActiveLeafAfterFileOpen(
+					plugin,
+					file,
+					plugin.app.workspace.getLeaf(false),
+				);
 		}),
 	);
 
@@ -93,7 +93,6 @@ async function resolveBoardspaceViewState(
 	}
 
 	if (forcedMarkdownPaths.has(path)) {
-		forcedMarkdownPaths.delete(path);
 		return viewState;
 	}
 
@@ -102,7 +101,7 @@ async function resolveBoardspaceViewState(
 		return viewState;
 	}
 
-	if (!(await isBoardspaceFile(plugin.app, file))) {
+	if (!hasBoardspaceFrontmatter(plugin.app.metadataCache.getFileCache(file))) {
 		return viewState;
 	}
 

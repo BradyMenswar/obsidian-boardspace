@@ -15,23 +15,49 @@ const BOARDSPACE_BLOCK_PATTERN = new RegExp(
 	"m",
 );
 
+interface BoardspaceFileParseResult {
+	snapshot: BoardspaceSnapshot | undefined;
+	version: number | undefined;
+}
+
+const BOARDSPACE_VERSION_PATTERN = /^board-version\s*:\s*(.+?)\s*$/m;
+
 export function parseBoardspaceFile(
 	fileContents: string,
 ): BoardspaceSnapshot | undefined {
+	return parseBoardspaceFileWithMetadata(fileContents).snapshot;
+}
+
+export function parseBoardspaceFileWithMetadata(
+	fileContents: string,
+): BoardspaceFileParseResult {
 	const match = fileContents.match(BOARDSPACE_BLOCK_PATTERN);
 	if (!match) {
-		return undefined;
+		return {
+			snapshot: undefined,
+			version: readBoardspaceVersion(fileContents),
+		};
 	}
 
 	const rawSnapshot = match[1]?.trim();
 	if (!rawSnapshot || rawSnapshot === "null") {
-		return undefined;
+		return {
+			snapshot: undefined,
+			version: readBoardspaceVersion(fileContents),
+		};
 	}
 
 	try {
-		return JSON.parse(rawSnapshot) as TLEditorSnapshot;
+		const parsed = JSON.parse(rawSnapshot) as unknown;
+		return {
+			snapshot: isBoardspaceSnapshot(parsed) ? parsed : undefined,
+			version: readBoardspaceVersion(fileContents),
+		};
 	} catch {
-		return undefined;
+		return {
+			snapshot: undefined,
+			version: readBoardspaceVersion(fileContents),
+		};
 	}
 }
 
@@ -48,4 +74,30 @@ export function serializeBoardspaceFile(
 ${serializedSnapshot}
 \`\`\`
 `;
+}
+
+export function isSupportedBoardspaceVersion(version: number | undefined) {
+	return version === BOARDSPACE_FILE_VERSION;
+}
+
+function readBoardspaceVersion(fileContents: string): number | undefined {
+	const rawVersion = fileContents.match(BOARDSPACE_VERSION_PATTERN)?.[1]?.trim();
+	if (!rawVersion) {
+		return undefined;
+	}
+
+	const version = Number(rawVersion.replace(/^["']|["']$/g, ""));
+	return Number.isInteger(version) ? version : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function isBoardspaceSnapshot(value: unknown): value is TLEditorSnapshot {
+	if (!isRecord(value)) {
+		return false;
+	}
+
+	return isRecord(value.document) && isRecord(value.session);
 }
