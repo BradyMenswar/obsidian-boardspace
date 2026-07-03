@@ -491,10 +491,9 @@ function BoardColumnShapeView({ shape }: { shape: BoardColumnShape }) {
 	);
 	const isSourceColumn = dragState.sourceColumnId === shape.id;
 	const isTargetColumn = dragState.targetColumnId === shape.id;
+	const isEmptyColumn = !shape.props.collapsed && childShapes.length === 0;
 	const showsEmptyState =
-		!shape.props.collapsed &&
-		childShapes.length === 0 &&
-		!isSourceColumn;
+		isEmptyColumn && !isSourceColumn;
 
 	useEffect(() => {
 		setDraftTitle(shape.props.title);
@@ -655,7 +654,7 @@ function BoardColumnShapeView({ shape }: { shape: BoardColumnShape }) {
 					<div
 						className="boardspace-column-shape__body"
 						style={bodyStyles}
-						data-empty={showsEmptyState ? "true" : "false"}
+						data-empty={isEmptyColumn ? "true" : "false"}
 					>
 						{showsEmptyState ? (
 							<div className="boardspace-column-shape__empty" />
