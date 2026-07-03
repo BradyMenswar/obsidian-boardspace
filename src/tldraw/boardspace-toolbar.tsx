@@ -22,6 +22,7 @@ export function BoardspaceToolbar() {
 			<AssetToolbarItem />
 			<ToolbarItem tool="todo" />
 			<ToolbarItem tool="column" />
+			<ToolbarItem tool="board-link" />
 			<ToolbarItem tool="swatch" />
 		</DefaultToolbar>
 	);

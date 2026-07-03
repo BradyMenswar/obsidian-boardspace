@@ -651,15 +651,17 @@ function BoardColumnShapeView({ shape }: { shape: BoardColumnShape }) {
 						</div>
 					</div>
 				</div>
-				{showsEmptyState ? (
+				{shape.props.collapsed ? null : (
 					<div
 						className="boardspace-column-shape__body"
 						style={bodyStyles}
-						data-empty="true"
+						data-empty={showsEmptyState ? "true" : "false"}
 					>
-						<div className="boardspace-column-shape__empty" />
+						{showsEmptyState ? (
+							<div className="boardspace-column-shape__empty" />
+						) : null}
 					</div>
-				) : null}
+				)}
 			</div>
 			{shape.props.collapsed ? null : (
 				<div className="boardspace-column-shape__drag-overlay">

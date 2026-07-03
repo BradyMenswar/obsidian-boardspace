@@ -17,6 +17,10 @@ import {
 	BOARD_COLUMN_SHELL_PADDING_BOTTOM,
 } from "./board-column-config";
 import { BOARD_NOTE_MIN_HEIGHT } from "./board-note-config";
+import {
+	BOARD_LINK_COLUMN_HEIGHT,
+	BoardLinkShape,
+} from "./board-link-shape";
 import { BoardNoteShape, getBoardNoteMeasuredHeight } from "./board-note-shape";
 import { BoardSwatchShape } from "./board-swatch-shape";
 import { BoardTodoShape, getBoardTodoMeasuredHeight } from "./board-todo-shape";
@@ -30,6 +34,7 @@ import {
 } from "./boardspace-media-caption";
 const COLUMN_ALLOWED_SHAPE_TYPES = new Set<TLShape["type"]>([
 	"board-note",
+	"board-link",
 	"board-swatch",
 	"board-todo",
 	"image",
@@ -110,6 +115,14 @@ export function getBoardColumnLayoutResult(
 
 		if (shape.type === "board-todo") {
 			const nextShape = getNormalizedBoardTodoShape(editor, shape, innerWidth, nextY);
+			updates.push(nextShape.update);
+			nextY += nextShape.height;
+			nextY += BOARD_COLUMN_CHILD_GAP;
+			continue;
+		}
+
+		if (shape.type === "board-link") {
+			const nextShape = getNormalizedBoardLinkShape(shape, innerWidth, nextY);
 			updates.push(nextShape.update);
 			nextY += nextShape.height;
 			nextY += BOARD_COLUMN_CHILD_GAP;
@@ -286,6 +299,10 @@ export function getAffectedBoardColumnIdsForShapeChange(
 }
 
 function getBoardColumnCounterKind(shape: TLShape): BoardColumnCounterKind | undefined {
+	if (shape.type === "board-link") {
+		return "board";
+	}
+
 	if (
 		shape.type === "board-note" ||
 		shape.type === "board-swatch" ||
@@ -384,8 +401,9 @@ function getNormalizedBoardSwatchShape(
 
 function isBoardColumnCardShape(
 	shape: TLShape,
-) : shape is BoardNoteShape | BoardSwatchShape | BoardTodoShape | BoardspaceMediaShape {
+) : shape is BoardLinkShape | BoardNoteShape | BoardSwatchShape | BoardTodoShape | BoardspaceMediaShape {
 	return (
+		shape.type === "board-link" ||
 		shape.type === "board-note" ||
 		shape.type === "board-swatch" ||
 		shape.type === "board-todo" ||
@@ -394,7 +412,7 @@ function isBoardColumnCardShape(
 }
 
 function getBoardColumnCardHeight(
-	shape: BoardNoteShape | BoardSwatchShape | BoardTodoShape | BoardspaceMediaShape,
+	shape: BoardLinkShape | BoardNoteShape | BoardSwatchShape | BoardTodoShape | BoardspaceMediaShape,
 	editor?: Editor,
 ) {
 	if (isBoardspaceMediaShape(shape)) {
@@ -402,6 +420,26 @@ function getBoardColumnCardHeight(
 	}
 
 	return shape.props.h;
+}
+
+function getNormalizedBoardLinkShape(
+	shape: BoardLinkShape,
+	width: number,
+	y: number,
+): { height: number; update: TLShapePartial<BoardLinkShape> } {
+	return {
+		height: BOARD_LINK_COLUMN_HEIGHT,
+		update: {
+			id: shape.id,
+			type: shape.type,
+			x: BOARD_COLUMN_PADDING,
+			y,
+			props: {
+				h: BOARD_LINK_COLUMN_HEIGHT,
+				w: width,
+			},
+		},
+	};
 }
 
 function getNormalizedBoardMediaShape(

@@ -7,6 +7,7 @@ export async function activateBoardView(
 	app: App,
 	file: TFile,
 	leaf?: WorkspaceLeaf | null,
+	options: { history?: boolean } = {},
 ) {
 	const { workspace } = app;
 
@@ -16,7 +17,7 @@ export async function activateBoardView(
 		type: BOARDSPACE_VIEW_TYPE,
 		state: { file: file.path },
 		active: true,
-	});
+	}, options.history ? { history: true } : undefined);
 
 	await workspace.revealLeaf(targetLeaf);
 }

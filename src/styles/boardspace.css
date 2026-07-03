@@ -122,11 +122,31 @@
 .boardspace-editor .boardspace-column-shape__collapse:active,
 .boardspace-editor .boardspace-column-shape__collapse:focus,
 .boardspace-editor .boardspace-column-shape__collapse:focus-visible,
+.boardspace-editor .boardspace-board-link-shape__icon,
+.boardspace-editor .boardspace-board-link-shape__icon:hover,
+.boardspace-editor .boardspace-board-link-shape__icon:active,
+.boardspace-editor .boardspace-board-link-shape__icon:focus,
+.boardspace-editor .boardspace-board-link-shape__icon:focus-visible,
+.boardspace-editor .boardspace-board-link-shape__title,
+.boardspace-editor .boardspace-board-link-shape__title:hover,
+.boardspace-editor .boardspace-board-link-shape__title:active,
+.boardspace-editor .boardspace-board-link-shape__title:focus,
+.boardspace-editor .boardspace-board-link-shape__title:focus-visible,
+.boardspace-editor .boardspace-board-link-shape__target,
+.boardspace-editor .boardspace-board-link-shape__target:hover,
+.boardspace-editor .boardspace-board-link-shape__target:active,
+.boardspace-editor .boardspace-board-link-shape__target:focus,
+.boardspace-editor .boardspace-board-link-shape__target:focus-visible,
 .boardspace-editor .boardspace-style-panel__swatch-color-button,
 .boardspace-editor .boardspace-style-panel__swatch-color-button:hover,
 .boardspace-editor .boardspace-style-panel__swatch-color-button:active,
 .boardspace-editor .boardspace-style-panel__swatch-color-button:focus,
-.boardspace-editor .boardspace-style-panel__swatch-color-button:focus-visible {
+.boardspace-editor .boardspace-style-panel__swatch-color-button:focus-visible,
+.boardspace-editor .boardspace-style-panel__board-link-target,
+.boardspace-editor .boardspace-style-panel__board-link-target:hover,
+.boardspace-editor .boardspace-style-panel__board-link-target:active,
+.boardspace-editor .boardspace-style-panel__board-link-target:focus,
+.boardspace-editor .boardspace-style-panel__board-link-target:focus-visible {
 	appearance: none;
 	-webkit-appearance: none;
 	background: transparent;
@@ -141,6 +161,9 @@
 .boardspace-editor .boardspace-todo-shape__title-input,
 .boardspace-editor .boardspace-todo-shape__title-input:hover,
 .boardspace-editor .boardspace-todo-shape__title-input:focus,
+.boardspace-editor .boardspace-board-link-shape__title-input,
+.boardspace-editor .boardspace-board-link-shape__title-input:hover,
+.boardspace-editor .boardspace-board-link-shape__title-input:focus,
 .boardspace-editor .boardspace-todo-shape__task-input,
 .boardspace-editor .boardspace-todo-shape__task-input:hover,
 .boardspace-editor .boardspace-todo-shape__task-input:focus {
@@ -260,6 +283,223 @@
 	text-align: center;
 	letter-spacing: 0.02em;
 	word-break: break-word;
+}
+
+.boardspace-board-link-shape {
+	pointer-events: all;
+	box-shadow: none;
+	overflow: visible;
+}
+
+.boardspace-board-link-shape[data-in-column="true"] {
+	box-shadow: none;
+}
+
+.boardspace-board-link-shape__inner {
+	box-sizing: border-box;
+	position: relative;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 100%;
+	min-height: 100%;
+	padding: 0;
+	border: 0;
+	overflow: visible;
+	gap: 10px;
+}
+
+.boardspace-board-link-shape__inner[data-in-column="true"] {
+	flex-direction: row;
+	align-items: center;
+	justify-content: flex-start;
+	padding: 16px clamp(16px, 4%, 36px);
+	gap: clamp(12px, 3%, 24px);
+	overflow: hidden;
+}
+
+.boardspace-board-link-shape__top-bar {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 4px;
+	background: transparent;
+}
+
+.boardspace-board-link-shape__icon {
+	position: relative;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: 0 0 auto;
+	width: 128px;
+	height: 128px;
+	padding: 0;
+	border-radius: 26px;
+	color: var(--text-normal);
+	cursor: pointer;
+	pointer-events: all;
+	box-shadow:
+		0 1px 2px rgba(0, 0, 0, 0.08),
+		0 10px 24px rgba(0, 0, 0, 0.08);
+}
+
+.boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__icon {
+	width: 76px;
+	height: 76px;
+	border-radius: 18px;
+	box-shadow: none;
+}
+
+.boardspace-board-link-shape__icon::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	background: rgba(255, 255, 255, 0.04);
+	opacity: 0;
+	pointer-events: none;
+}
+
+.theme-light .boardspace-board-link-shape__icon::after {
+	background: rgba(0, 0, 0, 0.018);
+}
+
+.boardspace-board-link-shape__icon:hover::after,
+.boardspace-board-link-shape__icon:focus-visible::after {
+	opacity: 1;
+}
+
+.boardspace-board-link-shape__icon svg {
+	display: block;
+	width: 62%;
+	height: 62%;
+	fill: currentColor;
+}
+
+.boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__icon svg {
+	width: 58%;
+	height: 58%;
+}
+
+.boardspace-board-link-shape__copy {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	min-width: 0;
+	max-width: 100%;
+	gap: 7px;
+}
+
+.boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__copy {
+	align-items: flex-start;
+	flex: 0 1 auto;
+	gap: 7px;
+	min-width: 0;
+	max-width: calc(100% - 120px);
+}
+
+.boardspace-board-link-shape__title,
+.boardspace-board-link-shape__title-input {
+	width: 100%;
+	min-width: 0;
+	max-width: 100%;
+	padding: 0;
+	margin: 0;
+	font-family: var(--tl-font-sans);
+	font-weight: 700;
+	line-height: 1.12;
+	text-align: center;
+	color: var(--text-normal);
+}
+
+.boardspace-board-link-shape__title {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	cursor: text;
+	pointer-events: all;
+}
+
+.boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__title,
+.boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__title-input {
+	align-self: flex-start;
+	font-weight: 700;
+	line-height: 1.12;
+	text-align: left;
+	width: auto;
+}
+
+.boardspace-board-link-shape__title-input {
+	pointer-events: all;
+}
+
+.boardspace-board-link-shape__counts {
+	width: 100%;
+	min-width: 0;
+	font-family: var(--tl-font-sans);
+	font-weight: 500;
+	line-height: 1.15;
+	text-align: center;
+	opacity: 0.64;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__counts {
+	align-self: flex-start;
+	font-weight: 500;
+	line-height: 1.15;
+	opacity: 0.64;
+	text-align: left;
+	width: auto;
+}
+
+.boardspace-board-link-shape__target {
+	margin-top: 2px;
+	padding: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: currentColor;
+	font-family: var(--tl-font-sans);
+	font-size: 14px;
+	font-weight: 500;
+	line-height: 1;
+	cursor: pointer;
+	opacity: 0.74;
+	pointer-events: all;
+}
+
+.boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__target {
+	margin-top: 0;
+	padding: 0;
+	background: transparent;
+	color: currentColor;
+	font-size: 12px;
+	font-weight: 500;
+	opacity: 0.74;
+	text-align: left;
+}
+
+.boardspace-board-link-shape__target:hover,
+.boardspace-board-link-shape__target:focus-visible {
+	background: transparent;
+	color: var(--text-normal);
+	opacity: 0.92;
+}
+
+.boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__target:hover,
+.boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__target:focus-visible {
+	background: transparent;
+	color: var(--text-normal);
+	opacity: 0.92;
+}
+
+.boardspace-board-link-shape__inner:not([data-in-column="true"]) {
+	flex-direction: column;
 }
 
 .boardspace-todo-shape {
@@ -650,6 +890,13 @@
 	display: flex;
 	flex-direction: column;
 	justify-content: flex-start;
+	background: rgba(0, 0, 0, 0.18);
+	pointer-events: none;
+	z-index: 0;
+}
+
+.theme-light .boardspace-column-shape__body {
+	background: rgba(0, 0, 0, 0.08);
 }
 
 .boardspace-column-shape__body[data-empty="true"] {
@@ -661,7 +908,7 @@
 	width: 100%;
 	height: min(132px, 100%);
 	margin: 0 auto;
-	background: rgba(0, 0, 0, 0.12);
+	background: transparent;
 }
 
 .boardspace-style-panel__target-toggle {
@@ -748,6 +995,40 @@
 	border-top-left-radius: 2px;
 	border-top-right-radius: 2px;
 	background: currentColor;
+}
+
+.boardspace-style-panel__target-icon--board-link-background {
+	width: 16px;
+	height: 16px;
+	border-radius: 4px;
+	box-shadow: inset 0 0 0 1.5px currentColor;
+}
+
+.boardspace-style-panel__target-icon--board-link-background::before {
+	content: "";
+	position: absolute;
+	inset: 4px;
+	border-radius: 2px;
+	background: currentColor;
+}
+
+.boardspace-style-panel__target-icon--board-link-text {
+	width: 18px;
+	height: 16px;
+	border-radius: 0;
+	box-shadow: none;
+}
+
+.boardspace-style-panel__target-icon--board-link-text::before {
+	content: "Aa";
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 11px;
+	font-weight: 700;
+	line-height: 1;
 }
 
 .boardspace-style-panel__target-button[data-enabled="false"] .boardspace-style-panel__target-icon--top-bar {
@@ -863,4 +1144,63 @@
 	font-size: 12px;
 	font-weight: 600;
 	line-height: 1;
+}
+
+.boardspace-style-panel__board-link-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	color: currentColor;
+}
+
+.boardspace-style-panel__board-link-icon svg {
+	display: block;
+	width: 15px;
+	height: 15px;
+	fill: currentColor;
+}
+
+.boardspace-style-panel__board-link-target {
+	display: inline-flex;
+	align-items: center;
+	width: 100%;
+	min-width: 0;
+	height: 32px;
+	padding: 0 10px;
+	border-radius: var(--tl-radius-3);
+	background: var(--tl-color-muted-2);
+	color: var(--tl-color-text);
+	cursor: pointer;
+}
+
+.boardspace-style-panel__board-link-target:hover,
+.boardspace-style-panel__board-link-target:focus-visible {
+	background: var(--tl-color-muted-3);
+}
+
+.boardspace-style-panel__board-link-target-label {
+	display: block;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 12px;
+	font-weight: 600;
+	line-height: 1;
+}
+
+.boardspace-board-link-suggest__title {
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.boardspace-board-link-suggest__path {
+	margin-top: 2px;
+	font-size: 12px;
+	color: var(--text-muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }

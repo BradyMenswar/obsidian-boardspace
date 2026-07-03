@@ -39,6 +39,22 @@ declare module "@tldraw/tlschema" {
 			topBarCustomColor: string;
 			w: number;
 		};
+		"board-link": {
+			boardCount: number;
+			cardCount: number;
+			color: BoardspaceShapeColor;
+			customColor: string;
+			dash: TLDefaultDashStyle;
+			filePath: string;
+			fill: TLDefaultFillStyle;
+			h: number;
+			icon: "board" | "bookmark" | "folder" | "lightbulb" | "layers" | "sparkle";
+			size: TLDefaultSizeStyle;
+			title: string;
+			topBarColor: BoardspaceTopBarColor;
+			topBarCustomColor: string;
+			w: number;
+		};
 		"board-swatch": {
 			colorValue: string;
 			h: number;

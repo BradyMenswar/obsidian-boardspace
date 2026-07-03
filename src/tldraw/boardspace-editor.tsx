@@ -1,5 +1,9 @@
 import { TFile } from "obsidian";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+	BoardspaceFileProvider,
+	useBoardspaceFilePath,
+} from "context/boardspace-file-context";
 import { useApp } from "hooks/use-app";
 import {
 	ArrowShapeTool,
@@ -59,6 +63,16 @@ import {
 	BoardColumnShapeUtil,
 } from "./board-column-shape";
 import { BoardColumnTool } from "./board-column-tool";
+import {
+	BoardLinkIconGlyph,
+	BoardLinkIconStyle,
+	BoardLinkShape,
+	BoardLinkShapeUtil,
+	chooseBoardspaceFile,
+	getBoardLinkIconValues,
+	refreshBoardLinkCounts,
+} from "./board-link-shape";
+import { BoardLinkTool } from "./board-link-tool";
 import {
 	getAffectedBoardColumnIdsForShapeChange,
 	getBoardColumnReorderUpdates,
@@ -165,12 +179,14 @@ const BOARDSPACE_TOOLS = [
 	BoardNoteTool,
 	BoardTodoTool,
 	BoardColumnTool,
+	BoardLinkTool,
 	BoardSwatchTool,
 ] as const;
 const BOARDSPACE_SHAPES = [
 	BoardNoteShapeUtil,
 	BoardTodoShapeUtil,
 	BoardColumnShapeUtil,
+	BoardLinkShapeUtil,
 	BoardSwatchShapeUtil,
 ] as const;
 const BOARDSPACE_OPTIONS = {
@@ -282,19 +298,21 @@ function BoardspaceEditorInner({
 			data-board-file={file?.path ?? ""}
 			data-canvas-tone={currentTone}
 		>
-			<Tldraw
-				assets={assetStore}
-				autoFocus={isActive}
-				components={BOARDSPACE_COMPONENTS}
-				initialState="select"
-				key={loadKey}
-				onMount={handleMount}
-				options={BOARDSPACE_OPTIONS}
-				overrides={BOARDSPACE_OVERRIDES}
-				shapeUtils={BOARDSPACE_SHAPES}
-				snapshot={snapshot}
-				tools={BOARDSPACE_TOOLS}
-			/>
+			<BoardspaceFileProvider value={file?.path ?? ""}>
+				<Tldraw
+					assets={assetStore}
+					autoFocus={isActive}
+					components={BOARDSPACE_COMPONENTS}
+					initialState="select"
+					key={loadKey}
+					onMount={handleMount}
+					options={BOARDSPACE_OPTIONS}
+					overrides={BOARDSPACE_OVERRIDES}
+					shapeUtils={BOARDSPACE_SHAPES}
+					snapshot={snapshot}
+					tools={BOARDSPACE_TOOLS}
+				/>
+			</BoardspaceFileProvider>
 		</div>
 	);
 }
@@ -350,6 +368,16 @@ function pickBoardspaceTools(
 		label: "Column",
 		onSelect() {
 			editor.setCurrentTool("column");
+		},
+	};
+
+	nextTools["board-link"] = {
+		id: "board-link",
+		icon: <BoardLinkToolIcon />,
+		kbd: "b",
+		label: "Board link",
+		onSelect() {
+			editor.setCurrentTool("board-link");
 		},
 	};
 
@@ -604,6 +632,25 @@ function TodoToolIcon() {
 	);
 }
 
+function BoardLinkToolIcon() {
+	return (
+		<svg
+			viewBox="0 0 16 16"
+			aria-hidden="true"
+			fill="none"
+			stroke="currentColor"
+			strokeLinecap="round"
+			strokeLinejoin="round"
+			strokeWidth="1.2"
+		>
+			<rect x="2.5" y="3" width="8" height="10" rx="1.1" />
+			<path d="M10.5 5h1.2a1.8 1.8 0 0 1 0 3.6H10" />
+			<path d="M6.2 7h4.1" />
+			<path d="M5 10.3h3.2" opacity="0.64" />
+		</svg>
+	);
+}
+
 function SwatchToolIcon() {
 	return (
 		<svg
@@ -673,6 +720,7 @@ function BoardspaceStylePanelContent() {
 				.filter(
 					(shape): shape is BoardspaceStylableShape =>
 						shape.type === "board-note" ||
+						shape.type === "board-link" ||
 						shape.type === "board-column" ||
 						shape.type === "board-swatch" ||
 						shape.type === "board-todo",
@@ -681,6 +729,9 @@ function BoardspaceStylePanelContent() {
 	);
 	const selectedSwatches = selectedStylableShapes.filter(
 		(shape): shape is BoardSwatchShape => shape.type === "board-swatch",
+	);
+	const selectedBoardLinks = selectedStylableShapes.filter(
+		(shape): shape is BoardLinkShape => shape.type === "board-link",
 	);
 	const selectedColorTargetShapes = selectedStylableShapes.filter(
 		(shape): shape is BoardspaceColorTargetShape => shape.type !== "board-swatch",
@@ -692,6 +743,10 @@ function BoardspaceStylePanelContent() {
 
 	if (selectedSwatches.length === selectedStylableShapes.length) {
 		return <BoardspaceSwatchStylePanelContent />;
+	}
+
+	if (selectedBoardLinks.length === selectedStylableShapes.length) {
+		return <BoardspaceBoardLinkStylePanelContent selectedBoardLinks={selectedBoardLinks} />;
 	}
 
 	if (selectedSwatches.length > 0) {
@@ -708,6 +763,11 @@ function BoardspaceStylePanelContent() {
 				omitFirstSection={true}
 				useBoardspaceDashPicker={true}
 			/>
+			{selectedBoardLinks.length > 0 ? (
+				<StylePanelSection>
+					<BoardspaceBoardLinkPanel selectedBoardLinks={selectedBoardLinks} />
+				</StylePanelSection>
+			) : null}
 		</>
 	);
 }
@@ -864,11 +924,13 @@ function BoardspaceHelperButtons() {
 
 type BoardspaceStylableShape =
 	| BoardNoteShape
+	| BoardLinkShape
 	| BoardColumnShape
 	| BoardSwatchShape
 	| BoardTodoShape;
 type BoardspaceColorTargetShape =
 	| BoardNoteShape
+	| BoardLinkShape
 	| BoardColumnShape
 	| BoardTodoShape;
 
@@ -1005,6 +1067,7 @@ function BoardspaceNoteColorPicker({
 	onColorSelect,
 	onCustomColorSelect,
 	onTransparentSelect,
+	showTransparent = true,
 	value,
 }: {
 	title: string;
@@ -1015,6 +1078,7 @@ function BoardspaceNoteColorPicker({
 	onColorSelect: (value: (typeof BOARDSPACE_COLOR_VALUES)[number]) => void;
 	onCustomColorSelect: (value: string) => void;
 	onTransparentSelect: () => void;
+	showTransparent?: boolean;
 	value:
 		| {
 				type: "mixed";
@@ -1045,7 +1109,7 @@ function BoardspaceNoteColorPicker({
 					"solid",
 				)
 			: normalizeBoardspaceCustomColor(customColor);
-	const selectedValue = transparentActive
+	const selectedValue = showTransparent && transparentActive
 		? BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR
 		: value?.type === "shared"
 			? value.value
@@ -1060,23 +1124,25 @@ function BoardspaceNoteColorPicker({
 				asChild
 			>
 				<TldrawUiGrid>
-					<TldrawUiToolbarToggleItem
-						type="icon"
-						value={BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR}
-						data-testid="style.color.transparent"
-						data-isactive={transparentActive ? "true" : "false"}
-						title={transparentLabel}
-						aria-label={transparentLabel}
-						onClick={() => {
-							onHistoryMark("clear note color");
-							onTransparentSelect();
-						}}
-					>
-						<span
-							className="boardspace-style-panel__color-swatch boardspace-style-panel__color-swatch--transparent"
-							aria-hidden="true"
-						/>
-					</TldrawUiToolbarToggleItem>
+					{showTransparent ? (
+						<TldrawUiToolbarToggleItem
+							type="icon"
+							value={BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR}
+							data-testid="style.color.transparent"
+							data-isactive={transparentActive ? "true" : "false"}
+							title={transparentLabel}
+							aria-label={transparentLabel}
+							onClick={() => {
+								onHistoryMark("clear note color");
+								onTransparentSelect();
+							}}
+						>
+							<span
+								className="boardspace-style-panel__color-swatch boardspace-style-panel__color-swatch--transparent"
+								aria-hidden="true"
+							/>
+						</TldrawUiToolbarToggleItem>
+					) : null}
 					{BOARDSPACE_COLOR_VALUES.map((color) => {
 						const isActive =
 							!transparentActive &&
@@ -1260,15 +1326,282 @@ function BoardspaceSwatchLabelModePicker() {
 	);
 }
 
+function BoardspaceBoardLinkStylePanelContent({
+	selectedBoardLinks,
+}: {
+	selectedBoardLinks: BoardLinkShape[];
+}) {
+	return (
+		<>
+			<StylePanelSection>
+				<BoardspaceBoardLinkColorSection selectedShapes={selectedBoardLinks} />
+				<StylePanelOpacityPicker />
+			</StylePanelSection>
+			<StylePanelSection>
+				<BoardspaceBoardLinkPanel selectedBoardLinks={selectedBoardLinks} />
+			</StylePanelSection>
+		</>
+	);
+}
+
+function BoardspaceBoardLinkColorSection({
+	selectedShapes,
+}: {
+	selectedShapes: BoardLinkShape[];
+}) {
+	const editor = useEditor();
+	const [colorTarget, setColorTarget] = useState<"background" | "iconText">(
+		"background",
+	);
+	const { styles, onHistoryMark, onValueChange } = useStylePanelContext();
+	const backgroundCustomColor = styles.get(BoardspaceCustomColorStyle);
+	const iconTextCustomColor = styles.get(BoardNoteTopBarCustomColorStyle);
+	const pickerStyle =
+		colorTarget === "iconText" ? BoardNoteTopBarColorStyle : BoardspaceColorStyle;
+	const pickerValue = styles.get(pickerStyle);
+	const customColorValue =
+		colorTarget === "iconText" ? iconTextCustomColor : backgroundCustomColor;
+
+	if (!pickerValue) {
+		return null;
+	}
+
+	return (
+		<>
+			<div
+				className="boardspace-style-panel__target-toggle"
+				role="tablist"
+				aria-label="Board link color target"
+			>
+				<button
+					type="button"
+					className="boardspace-style-panel__target-button"
+					data-active={colorTarget === "background" ? "true" : "false"}
+					aria-pressed={colorTarget === "background"}
+					title="Apply colors to the icon background"
+					onClick={() => setColorTarget("background")}
+				>
+					<span className="boardspace-style-panel__target-icon boardspace-style-panel__target-icon--board-link-background" />
+				</button>
+				<button
+					type="button"
+					className="boardspace-style-panel__target-button"
+					data-active={colorTarget === "iconText" ? "true" : "false"}
+					aria-pressed={colorTarget === "iconText"}
+					title="Apply colors to the icon and text"
+					onClick={() => setColorTarget("iconText")}
+				>
+					<span className="boardspace-style-panel__target-icon boardspace-style-panel__target-icon--board-link-text" />
+				</button>
+			</div>
+			<div
+				key={colorTarget}
+				className="boardspace-style-panel__note-color-picker"
+			>
+				<BoardspaceNoteColorPicker
+					title={colorTarget === "iconText" ? "Icon and text color" : "Background color"}
+					value={pickerValue}
+					customColor={
+						customColorValue?.type === "shared"
+							? customColorValue.value
+							: undefined
+					}
+					showTransparent={false}
+					transparentActive={false}
+					transparentLabel=""
+					onHistoryMark={onHistoryMark}
+					onTransparentSelect={() => undefined}
+					onColorSelect={(value) => {
+						if (colorTarget === "iconText") {
+							onValueChange(BoardNoteTopBarColorStyle, value);
+							return;
+						}
+
+						onValueChange(BoardspaceColorStyle, value);
+						updateSelectedBoardLinkShapes(editor, selectedShapes, (shape) =>
+							shape.props.fill === "none" ? { fill: "semi" } : null,
+						);
+					}}
+					onCustomColorSelect={(value) => {
+						if (colorTarget === "iconText") {
+							onValueChange(BoardNoteTopBarCustomColorStyle, value);
+							onValueChange(BoardNoteTopBarColorStyle, BOARDSPACE_CUSTOM_COLOR);
+							return;
+						}
+
+						onValueChange(BoardspaceCustomColorStyle, value);
+						onValueChange(BoardspaceColorStyle, BOARDSPACE_CUSTOM_COLOR);
+						updateSelectedBoardLinkShapes(editor, selectedShapes, (shape) =>
+							shape.props.fill === "none" ? { fill: "semi" } : null,
+						);
+					}}
+				/>
+				{colorTarget === "background" ? (
+					<StylePanelFillPicker />
+				) : (
+					<StylePanelSizePicker />
+				)}
+			</div>
+		</>
+	);
+}
+
+function BoardspaceBoardLinkPanel({
+	selectedBoardLinks,
+}: {
+	selectedBoardLinks: BoardLinkShape[];
+}) {
+	return (
+		<>
+			<BoardspaceBoardLinkIconPicker />
+			{selectedBoardLinks.length === 1 ? (
+				<BoardspaceBoardLinkTargetButton boardLink={selectedBoardLinks[0]} />
+			) : null}
+		</>
+	);
+}
+
+function BoardspaceBoardLinkIconPicker() {
+	const { styles, onHistoryMark, onValueChange } = useStylePanelContext();
+	const icon = styles.get(BoardLinkIconStyle);
+
+	if (!icon) {
+		return null;
+	}
+
+	return (
+		<TldrawUiToolbar label="Board icon">
+			<TldrawUiToolbarToggleGroup
+				type="single"
+				value={icon.type === "shared" ? icon.value : null}
+				data-testid="style.board-link-icon"
+				asChild
+			>
+				<TldrawUiGrid>
+					{getBoardLinkIconValues().map((iconValue) => {
+						const isActive =
+							icon.type === "shared" && icon.value === iconValue;
+
+						return (
+							<TldrawUiToolbarToggleItem
+								key={iconValue}
+								type="icon"
+								value={iconValue}
+								data-isactive={isActive ? "true" : "false"}
+								title={`Board icon: ${iconValue}`}
+								onClick={() => {
+									onHistoryMark("set board link icon");
+									onValueChange(BoardLinkIconStyle, iconValue);
+								}}
+							>
+								<span className="boardspace-style-panel__board-link-icon">
+									<BoardLinkIconGlyph icon={iconValue} />
+								</span>
+							</TldrawUiToolbarToggleItem>
+						);
+					})}
+				</TldrawUiGrid>
+			</TldrawUiToolbarToggleGroup>
+		</TldrawUiToolbar>
+	);
+}
+
+function BoardspaceBoardLinkTargetButton({
+	boardLink,
+}: {
+	boardLink: BoardLinkShape | undefined;
+}) {
+	const app = useApp();
+	const editor = useEditor();
+	const sourcePath = useBoardspaceFilePath();
+
+	if (!boardLink) {
+		return null;
+	}
+
+	return (
+		<TldrawUiToolbar label="Linked board">
+			<button
+				type="button"
+				className="boardspace-style-panel__board-link-target"
+				title="Choose linked board"
+				onClick={async () => {
+					const file = await chooseBoardspaceFile(app, {
+						currentPath: boardLink.props.filePath,
+						sourcePath,
+					});
+
+					if (!file) {
+						return;
+					}
+
+					const counts = await refreshBoardLinkCounts(app, file.path);
+					const latestShape = editor.getShape(boardLink.id);
+					if (!latestShape || latestShape.type !== "board-link") {
+						return;
+					}
+
+					editor.updateShape({
+						id: latestShape.id,
+						type: latestShape.type,
+						props: {
+							...(counts ?? { boardCount: 0, cardCount: 0 }),
+							filePath: file.path,
+							title:
+								latestShape.props.title.trim().length > 0 &&
+								latestShape.props.title !== "Untitled board"
+									? latestShape.props.title
+									: file.basename,
+						},
+					});
+				}}
+			>
+				<span className="boardspace-style-panel__board-link-target-label">
+					{boardLink.props.filePath || "Choose board"}
+				</span>
+			</button>
+		</TldrawUiToolbar>
+	);
+}
+
 function getSelectedBoardspaceShapes(editor: Editor) {
 	return editor
 		.getSelectedShapes()
 		.filter(
 			(shape): shape is BoardspaceColorTargetShape =>
 				shape.type === "board-note" ||
+				shape.type === "board-link" ||
 				shape.type === "board-column" ||
 				shape.type === "board-todo",
 		);
+}
+
+function updateSelectedBoardLinkShapes(
+	editor: Editor,
+	selectedShapes: BoardLinkShape[],
+	props:
+		| Partial<BoardLinkShape["props"]>
+		| ((shape: BoardLinkShape) => Partial<BoardLinkShape["props"]> | null),
+) {
+	if (selectedShapes.length === 0) {
+		return;
+	}
+
+	editor.updateShapes(
+		selectedShapes.flatMap((shape) => {
+			const nextProps = typeof props === "function" ? props(shape) : props;
+
+			if (!nextProps) {
+				return [];
+			}
+
+			return {
+				id: shape.id,
+				type: shape.type,
+				props: nextProps,
+			};
+		}),
+	);
 }
 
 function updateSelectedBoardspaceShapes(

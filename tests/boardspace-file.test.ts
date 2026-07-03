@@ -11,6 +11,10 @@ import {
 	BOARDSPACE_FILE_VERSION,
 	BoardspaceSnapshot,
 } from "../src/types/board";
+import {
+	formatBoardLinkCounts,
+	getBoardLinkCountsFromSnapshot,
+} from "../src/tldraw/board-link-counts";
 
 const snapshot = {
 	document: {
@@ -95,4 +99,53 @@ test("detects only current-version boardspace frontmatter", () => {
 		}),
 		false,
 	);
+});
+
+test("counts board links and cards in boardspace snapshots", () => {
+	const countedSnapshot = {
+		document: {
+			store: {
+				"shape:note": {
+					id: "shape:note",
+					typeName: "shape",
+					type: "board-note",
+					parentId: "page:page",
+				},
+				"shape:todo": {
+					id: "shape:todo",
+					typeName: "shape",
+					type: "board-todo",
+					parentId: "page:page",
+				},
+				"shape:link": {
+					id: "shape:link",
+					typeName: "shape",
+					type: "board-link",
+					parentId: "page:page",
+				},
+				"shape:image": {
+					id: "shape:image",
+					typeName: "shape",
+					type: "image",
+					parentId: "page:page",
+				},
+				"shape:caption": {
+					id: "shape:caption",
+					typeName: "shape",
+					type: "board-note",
+					parentId: "shape:image",
+				},
+			},
+			schema: {},
+		},
+		session: snapshot.session,
+	} as unknown as BoardspaceSnapshot;
+
+	const counts = getBoardLinkCountsFromSnapshot(countedSnapshot);
+
+	assert.deepEqual(counts, {
+		boardCount: 1,
+		cardCount: 3,
+	});
+	assert.equal(formatBoardLinkCounts(counts), "1 board, 3 cards");
 });
