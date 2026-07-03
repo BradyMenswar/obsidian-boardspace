@@ -42,6 +42,61 @@ test("serializes and parses a boardspace snapshot", () => {
 	assert.deepEqual(parseBoardspaceFile(fileContents), snapshot);
 });
 
+test("serializes board links as Obsidian backlinks", () => {
+	const linkedSnapshot = {
+		document: {
+			store: {
+				"shape:link-a": {
+					id: "shape:link-a",
+					typeName: "shape",
+					type: "board-link",
+					parentId: "page:page",
+					props: {
+						filePath: "Projects/Board B.md",
+					},
+				},
+				"shape:link-b": {
+					id: "shape:link-b",
+					typeName: "shape",
+					type: "board-link",
+					parentId: "page:page",
+					props: {
+						filePath: "Projects/Board B.md",
+					},
+				},
+				"shape:link-c": {
+					id: "shape:link-c",
+					typeName: "shape",
+					type: "board-link",
+					parentId: "page:page",
+					props: {
+						filePath: "Ideas/Board C.md",
+					},
+				},
+				"shape:untargeted-link": {
+					id: "shape:untargeted-link",
+					typeName: "shape",
+					type: "board-link",
+					parentId: "page:page",
+					props: {
+						filePath: "",
+					},
+				},
+			},
+			schema: {},
+		},
+		session: snapshot.session,
+	} as unknown as BoardspaceSnapshot;
+
+	const fileContents = serializeBoardspaceFile(linkedSnapshot);
+
+	assert.match(fileContents, /<!-- boardspace-links:start -->/);
+	assert.match(fileContents, /\[\[Projects\/Board B\]\]/);
+	assert.match(fileContents, /\[\[Ideas\/Board C\]\]/);
+	assert.equal(fileContents.match(/\[\[Projects\/Board B\]\]/g)?.length, 1);
+	assert.deepEqual(parseBoardspaceFile(fileContents), linkedSnapshot);
+});
+
 test("returns no snapshot for empty boardspace files", () => {
 	const result = parseBoardspaceFileWithMetadata(serializeBoardspaceFile(undefined));
 

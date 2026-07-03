@@ -14,6 +14,8 @@ const BOARDSPACE_BLOCK_PATTERN = new RegExp(
 	"```" + BOARDSPACE_FILE_LANGUAGE + "\\s*([\\s\\S]*?)```",
 	"m",
 );
+const BOARDSPACE_LINKS_START = "<!-- boardspace-links:start -->";
+const BOARDSPACE_LINKS_END = "<!-- boardspace-links:end -->";
 
 interface BoardspaceFileParseResult {
 	snapshot: BoardspaceSnapshot | undefined;
@@ -67,12 +69,16 @@ export function serializeBoardspaceFile(
 	const serializedSnapshot = snapshot
 		? JSON.stringify(snapshot, null, 2)
 		: "null";
+	const backlinkSection = snapshot
+		? serializeBoardspaceBacklinkSection(snapshot)
+		: "";
 
 	return `${BOARDSPACE_FRONTMATTER}
 
 \`\`\`${BOARDSPACE_FILE_LANGUAGE}
 ${serializedSnapshot}
 \`\`\`
+${backlinkSection}
 `;
 }
 
@@ -100,4 +106,54 @@ function isBoardspaceSnapshot(value: unknown): value is TLEditorSnapshot {
 	}
 
 	return isRecord(value.document) && isRecord(value.session);
+}
+
+function serializeBoardspaceBacklinkSection(snapshot: BoardspaceSnapshot) {
+	const filePaths = getBoardspaceLinkedBoardPaths(snapshot);
+	if (filePaths.length === 0) {
+		return "";
+	}
+
+	return `
+${BOARDSPACE_LINKS_START}
+## Board links
+${filePaths.map((filePath) => `- ${formatObsidianWikiLink(filePath)}`).join("\n")}
+${BOARDSPACE_LINKS_END}
+`;
+}
+
+function getBoardspaceLinkedBoardPaths(snapshot: BoardspaceSnapshot) {
+	const store = snapshot.document?.store;
+	if (!isRecord(store)) {
+		return [];
+	}
+
+	const filePaths = new Set<string>();
+	for (const record of Object.values(store)) {
+		if (!isRecord(record) || record.type !== "board-link") {
+			continue;
+		}
+
+		const props = record.props;
+		if (!isRecord(props) || typeof props.filePath !== "string") {
+			continue;
+		}
+
+		const filePath = props.filePath.trim();
+		if (filePath) {
+			filePaths.add(filePath);
+		}
+	}
+
+	return Array.from(filePaths);
+}
+
+function formatObsidianWikiLink(filePath: string) {
+	const target = filePath
+		.replace(/\\/g, "/")
+		.replace(/\.md$/i, "")
+		.replace(/\|/g, "\\|")
+		.replace(/\]/g, "\\]");
+
+	return `[[${target}]]`;
 }

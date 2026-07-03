@@ -309,6 +309,15 @@
 	gap: 10px;
 }
 
+.boardspace-board-link-shape__inner:not([data-in-column="true"]) {
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	padding: 16px;
+	gap: 10px;
+	overflow: hidden;
+}
+
 .boardspace-board-link-shape__inner[data-in-column="true"] {
 	flex-direction: row;
 	align-items: center;
@@ -338,10 +347,10 @@
 	align-items: center;
 	justify-content: center;
 	flex: 0 0 auto;
-	width: 128px;
-	height: 128px;
+	width: 76px;
+	height: 76px;
 	padding: 0;
-	border-radius: 26px;
+	border-radius: 18px;
 	color: var(--text-normal);
 	cursor: pointer;
 	pointer-events: all;
@@ -351,9 +360,6 @@
 }
 
 .boardspace-board-link-shape__inner[data-in-column="true"] .boardspace-board-link-shape__icon {
-	width: 76px;
-	height: 76px;
-	border-radius: 18px;
 	box-shadow: none;
 }
 
@@ -406,6 +412,14 @@
 	max-width: calc(100% - 120px);
 }
 
+.boardspace-board-link-shape__inner:not([data-in-column="true"]) .boardspace-board-link-shape__copy {
+	align-items: center;
+	flex: 0 1 auto;
+	gap: 7px;
+	min-width: 0;
+	max-width: 100%;
+}
+
 .boardspace-board-link-shape__title,
 .boardspace-board-link-shape__title-input {
 	width: 100%;
@@ -437,6 +451,15 @@
 	width: auto;
 }
 
+.boardspace-board-link-shape__inner:not([data-in-column="true"]) .boardspace-board-link-shape__title,
+.boardspace-board-link-shape__inner:not([data-in-column="true"]) .boardspace-board-link-shape__title-input {
+	align-self: center;
+	font-weight: 700;
+	line-height: 1.12;
+	text-align: center;
+	width: auto;
+}
+
 .boardspace-board-link-shape__title-input {
 	pointer-events: all;
 }
@@ -460,6 +483,15 @@
 	line-height: 1.15;
 	opacity: 0.64;
 	text-align: left;
+	width: auto;
+}
+
+.boardspace-board-link-shape__inner:not([data-in-column="true"]) .boardspace-board-link-shape__counts {
+	align-self: center;
+	font-weight: 500;
+	line-height: 1.15;
+	opacity: 0.64;
+	text-align: center;
 	width: auto;
 }
 
@@ -785,7 +817,7 @@
 	display: flex;
 	justify-content: center;
 	align-items: center;
-	min-height: 58px;
+	min-height: 66px;
 	padding: 0 14px;
 }
 
@@ -794,7 +826,7 @@
 	flex-direction: column;
 	align-items: center;
 	justify-content: center;
-	gap: 4px;
+	gap: 6px;
 	width: 100%;
 	min-width: 0;
 }
@@ -828,7 +860,7 @@
 }
 
 .boardspace-column-shape__count {
-	font-size: 12px;
+	font-size: 11px;
 	line-height: 1.2;
 	color: var(--text-muted);
 }

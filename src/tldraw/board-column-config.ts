@@ -9,12 +9,12 @@ export const BOARD_COLUMN_BODY_GAP = 10;
 export const BOARD_COLUMN_CHILD_GAP = 8;
 export const BOARD_COLUMN_SHELL_PADDING_TOP = 20;
 export const BOARD_COLUMN_SHELL_PADDING_BOTTOM = 16;
-export const BOARD_COLUMN_HEADER_MIN_HEIGHT = 58;
-export const BOARD_COLUMN_HEADER_TEXT_GAP = 4;
+export const BOARD_COLUMN_HEADER_MIN_HEIGHT = 66;
+export const BOARD_COLUMN_HEADER_TEXT_GAP = 6;
 
 export function getBoardColumnHeaderHeight(size: TLDefaultSizeStyle) {
 	const titleHeight = LABEL_FONT_SIZES[size] * 1.3;
-	const countHeight = Math.max(11, LABEL_FONT_SIZES[size] - 2) * 1.2;
+	const countHeight = Math.max(10, LABEL_FONT_SIZES[size] - 3) * 1.2;
 
 	return Math.max(
 		BOARD_COLUMN_HEADER_MIN_HEIGHT,

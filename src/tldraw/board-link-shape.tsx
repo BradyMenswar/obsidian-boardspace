@@ -39,6 +39,7 @@ import {
 	startBoardColumnDrag,
 	useBoardColumnDragState,
 } from "./board-column-drag-state";
+import { doesShapeOverlapBoardColumnBody } from "./board-column-overlap";
 import {
 	BOARDSPACE_DEFAULT_CUSTOM_COLOR,
 	BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
@@ -59,11 +60,11 @@ export type BoardLinkShape = Extract<TLShape, { type: "board-link" }>;
 
 export const BOARD_LINK_DEFAULT_WIDTH = 176;
 export const BOARD_LINK_DEFAULT_HEIGHT = 220;
-export const BOARD_LINK_STANDALONE_WIDTH = 210;
-export const BOARD_LINK_STANDALONE_HEIGHT = 238;
-export const BOARD_LINK_MIN_WIDTH = 132;
-export const BOARD_LINK_MIN_HEIGHT = 128;
 export const BOARD_LINK_COLUMN_HEIGHT = 108;
+export const BOARD_LINK_STANDALONE_WIDTH = 210;
+export const BOARD_LINK_STANDALONE_HEIGHT = 168;
+export const BOARD_LINK_MIN_WIDTH = 132;
+export const BOARD_LINK_MIN_HEIGHT = BOARD_LINK_COLUMN_HEIGHT;
 
 const BOARD_LINK_ICON_VALUES = [
 	"board",
@@ -239,12 +240,24 @@ export class BoardLinkShapeUtil extends BaseBoxShapeUtil<BoardLinkShape> {
 	override onTranslateEnd(shape: BoardLinkShape) {
 		clearBoardColumnDrag(shape.id);
 
-		const nextShape = this.editor.getShape(shape.id);
+		let nextShape = this.editor.getShape(shape.id);
 		if (!nextShape || nextShape.type !== "board-link") {
 			return;
 		}
 
-		const parent = this.editor.getShape(nextShape.parentId);
+		let parent = this.editor.getShape(nextShape.parentId);
+		if (
+			parent?.type === "board-column" &&
+			!doesShapeOverlapBoardColumnBody(this.editor, parent, nextShape)
+		) {
+			this.editor.reparentShapes([nextShape], this.editor.getCurrentPageId());
+			nextShape = this.editor.getShape(shape.id);
+			if (!nextShape || nextShape.type !== "board-link") {
+				return;
+			}
+			parent = this.editor.getShape(nextShape.parentId);
+		}
+
 		if (
 			parent?.type === "board-column" ||
 			(
@@ -366,11 +379,8 @@ function BoardLinkShapeView({ shape }: { shape: BoardLinkShape }) {
 		[shape.props.boardCount, shape.props.cardCount],
 	);
 	const titleFontSize = useMemo(
-		() =>
-			isInColumn
-				? LABEL_FONT_SIZES[shape.props.size]
-				: Math.round(LABEL_FONT_SIZES[shape.props.size] * 1.25),
-		[isInColumn, shape.props.size],
+		() => LABEL_FONT_SIZES[shape.props.size],
+		[shape.props.size],
 	);
 	const titleStyles = useMemo(
 		() =>

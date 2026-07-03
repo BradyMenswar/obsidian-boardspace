@@ -43,6 +43,7 @@ import {
 	isColumnAllowedShape,
 	isColumnAllowedShapeType,
 } from "./board-column-layout";
+import { doesShapeOverlapBoardColumnBody } from "./board-column-overlap";
 import {
 	getBoardColumnDragState,
 	updateBoardColumnDrag,
@@ -388,6 +389,22 @@ export class BoardColumnShapeUtil extends BaseBoxShapeUtil<BoardColumnShape> {
 	) {
 		const dragState = getBoardColumnDragState();
 		if (dragState.targetColumnId === shape.id) {
+			const shouldKeepInColumn = draggingShapes.some(
+				(draggingShape) =>
+					draggingShape.parentId === shape.id &&
+					isColumnAllowedShape(draggingShape) &&
+					doesShapeOverlapBoardColumnBody(
+						this.editor,
+						shape,
+						draggingShape,
+						getBoardColumnVisibleHeight(shape),
+					),
+			);
+
+			if (shouldKeepInColumn) {
+				return;
+			}
+
 			updateBoardColumnDrag({
 				targetColumnId: null,
 				indicatorY: null,
@@ -548,7 +565,7 @@ function BoardColumnShapeView({ shape }: { shape: BoardColumnShape }) {
 			({
 				color: textColor,
 				fontFamily: "var(--tl-font-sans)",
-				fontSize: Math.max(11, LABEL_FONT_SIZES[shape.props.size] - 2),
+				fontSize: Math.max(10, LABEL_FONT_SIZES[shape.props.size] - 3),
 				opacity: 0.82,
 			}) as CSSProperties,
 		[shape.props.size, textColor],
