@@ -4,6 +4,8 @@ import {
 	BoardspaceDocumentV2,
 	BoardspaceTextCard,
 	BoardspaceTextCardStyle,
+	BoardspaceTodoCard,
+	BoardspaceTodoTask,
 	parseBoardspaceDocument,
 	serializeBoardspaceDocument,
 } from "./boardspace-document";
@@ -17,8 +19,18 @@ export interface BoardspaceEditorTextCard {
 	style: BoardspaceTextCardStyle;
 }
 
+export interface BoardspaceEditorTodoCard {
+	id: string;
+	order: number;
+	position: { x: number; y: number };
+	preferredSize: { width: number; height: number };
+	style: BoardspaceTextCardStyle;
+	title: string;
+	tasks: BoardspaceTodoTask[];
+}
+
 export type BoardspaceEditorState =
-	| { kind: "canonical"; textCards: BoardspaceEditorTextCard[] }
+	| { kind: "canonical"; textCards: BoardspaceEditorTextCard[]; todoCards: BoardspaceEditorTodoCard[] }
 	| { kind: "snapshot"; snapshot: TLEditorSnapshot };
 
 export function createSnapshotEditorState(snapshot: TLEditorSnapshot): BoardspaceEditorState {
@@ -50,14 +62,18 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			document = result.document;
 			untouchedReadOnlySource = "";
 			const textCards = result.document.textCardOrder.map((id) =>
-				toEditorTextCard(result.document.items[id]!),
+				toEditorTextCard(result.document.items[id] as BoardspaceTextCard),
 			);
+			const todoCards = Object.values(result.document.items)
+				.filter((item): item is BoardspaceTodoCard => item.kind === "todo")
+				.map(toEditorTodoCard);
+			const isEmpty = textCards.length === 0 && todoCards.length === 0;
 			return {
 				status: "editable",
-				sourceStatus: textCards.length === 0 ? "empty" : "loaded",
-				editorState: textCards.length > 0
-					? { kind: "canonical" as const, textCards }
-					: undefined,
+				sourceStatus: isEmpty ? "empty" : "loaded",
+				editorState: isEmpty
+					? undefined
+					: { kind: "canonical" as const, textCards, todoCards },
 			};
 		},
 		serializeEditorState(editorState) {
@@ -67,16 +83,20 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			if (!editorState) {
 				return serializeBoardspaceDocument({ ...document, items: {}, textCardOrder: [] });
 			}
-			const textCards = editorState.kind === "canonical"
-				? editorState.textCards.map(toCanonicalTextCard)
-				: readTextCardsFromSnapshot(editorState.snapshot);
-			const items = Object.fromEntries(textCards.map((card) => [card.id, card]));
-			if (Object.keys(items).length !== textCards.length) {
-				throw new Error("Text-card identities must be unique; the complete save was blocked.");
+			const cards = editorState.kind === "canonical"
+				? [
+					...editorState.textCards.map(toCanonicalTextCard),
+					...editorState.todoCards.map(toCanonicalTodoCard),
+				]
+				: readCardsFromSnapshot(editorState.snapshot);
+			const items = Object.fromEntries(cards.map((card) => [card.id, card]));
+			if (Object.keys(items).length !== cards.length) {
+				throw new Error("Canvas-item identities must be unique; the complete save was blocked.");
 			}
-			const retainedSourceOrder = document.textCardOrder.filter((id) => items[id]);
+			const retainedSourceOrder = document.textCardOrder.filter((id) => items[id]?.kind === "text");
 			const retainedIds = new Set(retainedSourceOrder);
-			const newSourceOrder = textCards
+			const newSourceOrder = cards
+				.filter((card): card is BoardspaceTextCard => card.kind === "text")
 				.map((card) => card.id)
 				.filter((id) => !retainedIds.has(id));
 			document = {
@@ -100,6 +120,18 @@ function toEditorTextCard(card: BoardspaceTextCard): BoardspaceEditorTextCard {
 	};
 }
 
+function toEditorTodoCard(card: BoardspaceTodoCard): BoardspaceEditorTodoCard {
+	return {
+		id: card.id,
+		order: card.placement.order,
+		position: { ...card.placement.position },
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+		title: card.title,
+		tasks: card.tasks.map((task) => ({ ...task })),
+	};
+}
+
 function toCanonicalTextCard(card: BoardspaceEditorTextCard): BoardspaceTextCard {
 	return {
 		id: card.id,
@@ -115,7 +147,23 @@ function toCanonicalTextCard(card: BoardspaceEditorTextCard): BoardspaceTextCard
 	};
 }
 
-function readTextCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceTextCard[] {
+function toCanonicalTodoCard(card: BoardspaceEditorTodoCard): BoardspaceTodoCard {
+	return {
+		id: card.id,
+		kind: "todo",
+		title: card.title,
+		tasks: card.tasks.map((task) => ({ ...task })),
+		placement: {
+			type: "root",
+			order: card.order,
+			position: { ...card.position },
+		},
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+	};
+}
+
+function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceTextCard | BoardspaceTodoCard> {
 	const store = snapshot.document?.store;
 	if (!isRecord(store)) {
 		throw new Error("The editor representation is malformed; the complete save was blocked.");
@@ -136,7 +184,7 @@ function readTextCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceTextCa
 			pageIds.push(recordId);
 			continue;
 		}
-		if (record.typeName !== "shape" || record.type !== "board-note") {
+		if (record.typeName !== "shape" || (record.type !== "board-note" && record.type !== "board-todo")) {
 			throw unsupportedRecord(recordId, typeof record.type === "string" ? record.type : String(record.typeName));
 		}
 		shapes.push(record);
@@ -146,7 +194,11 @@ function readTextCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceTextCa
 		throw new Error("A Boardspace editor representation must contain one document and one editor page; the complete save was blocked.");
 	}
 	shapes.sort((a, b) => String(a.index).localeCompare(String(b.index)));
-	return shapes.map((shape, order) => readTextCardShape(shape, order, pageIds[0]!));
+	return shapes.map((shape, order) =>
+		shape.type === "board-todo"
+			? readTodoCardShape(shape, order, pageIds[0]!)
+			: readTextCardShape(shape, order, pageIds[0]!),
+	);
 }
 
 function readTextCardShape(
@@ -180,6 +232,41 @@ function readTextCardShape(
 		preferredSize: { width: props.w, height: props.minH },
 		style,
 	};
+}
+
+function readTodoCardShape(
+	shape: Record<string, unknown>,
+	order: number,
+	pageId: string,
+): BoardspaceTodoCard {
+	const props = shape.props;
+	if (
+		typeof shape.id !== "string" || !shape.id.startsWith("shape:") ||
+		shape.parentId !== pageId ||
+		!isFiniteNumber(shape.x) || !isFiniteNumber(shape.y) || !isRecord(props) ||
+		!hasOnlyKeys(props, ["color", "customColor", "dash", "fill", "h", "size", "tasks", "title", "topBarColor", "topBarCustomColor", "w"]) ||
+		!isPositiveNumber(props.w) || !isPositiveNumber(props.h) || typeof props.title !== "string" ||
+		!Array.isArray(props.tasks) || !props.tasks.every(isTodoTask) ||
+		!isFiniteNumber(shape.opacity) || shape.opacity < 0 || shape.opacity > 1 ||
+		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true ||
+		(isRecord(shape.meta) && Object.keys(shape.meta).length > 0)
+	) {
+		throw new Error("A to-do card editor record is malformed; the complete save was blocked.");
+	}
+	return {
+		id: shape.id.slice("shape:".length),
+		kind: "todo",
+		title: props.title,
+		tasks: props.tasks.map((task) => ({ ...task })),
+		placement: { type: "root", order, position: { x: shape.x, y: shape.y } },
+		preferredSize: { width: props.w, height: props.h },
+		style: readTextCardStyle(props, shape.opacity),
+	};
+}
+
+function isTodoTask(value: unknown): value is BoardspaceTodoTask {
+	return isRecord(value) && hasOnlyKeys(value, ["id", "text", "checked"]) &&
+		typeof value.id === "string" && typeof value.text === "string" && typeof value.checked === "boolean";
 }
 
 function readTextCardStyle(

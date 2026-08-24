@@ -6,6 +6,7 @@ import {
 } from "../src/files/boardspace-document-adapter";
 import {
 	BoardspaceDocumentV2,
+	BoardspaceTextCard,
 	createEmptyBoardspaceDocument,
 	parseBoardspaceDocument,
 	serializeBoardspaceDocument,
@@ -40,13 +41,43 @@ const populatedDocument: BoardspaceDocumentV2 = {
 };
 const populatedSource = serializeBoardspaceDocument(populatedDocument);
 
+const todoDocument: BoardspaceDocumentV2 = {
+	schemaVersion: 2,
+	frontmatterLines: [],
+	textCardOrder: [],
+	items: {
+		"todo-1": {
+			id: "todo-1",
+			kind: "todo",
+			title: "Release checklist",
+			tasks: [
+				{ id: "task-1", text: "Ship **without Markdown**", checked: false },
+				{ id: "task-2", text: "Tell the team", checked: true },
+			],
+			placement: { type: "root", order: 0, position: { x: 80, y: 120 } },
+			preferredSize: { width: 360, height: 148 },
+			style: {
+				color: "light-green",
+				customColor: "#22c55e",
+				dash: "dashed",
+				fill: "solid",
+				opacity: 0.8,
+				size: "l",
+				topBarColor: "green",
+				topBarCustomColor: "#16a34a",
+			},
+		},
+	},
+};
+const todoSource = serializeBoardspaceDocument(todoDocument);
+
 const multiCardDocument: BoardspaceDocumentV2 = {
 	...populatedDocument,
 	textCardOrder: ["text-2", "text-1"],
 	items: {
 		...populatedDocument.items,
 		"text-2": {
-			...populatedDocument.items["text-1"]!,
+			...(populatedDocument.items["text-1"] as BoardspaceTextCard),
 			id: "text-2",
 			markdown: "Second card\n\n- original",
 			placement: { type: "root", order: 1, position: { x: 140, y: 160 } },
@@ -103,8 +134,73 @@ test("round-trips one raw-Markdown text card through the complete editor represe
 				style: populatedDocument.items["text-1"]?.style,
 			},
 		],
+		todoCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), populatedSource);
+});
+
+test("round-trips a to-do card and stable task identities through the complete editor representation", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(todoSource);
+
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable") return;
+	assert.deepEqual(loaded.editorState, {
+		kind: "canonical",
+		textCards: [],
+		todoCards: [
+			{
+				id: "todo-1",
+				order: 0,
+				position: { x: 80, y: 120 },
+				preferredSize: { width: 360, height: 148 },
+				style: todoDocument.items["todo-1"]?.style,
+				tasks: [
+					{ id: "task-1", text: "Ship **without Markdown**", checked: false },
+					{ id: "task-2", text: "Tell the team", checked: true },
+				],
+				title: "Release checklist",
+			},
+		],
+	});
+	assert.equal(adapter.serializeEditorState(loaded.editorState), todoSource);
+});
+
+test("preserves task identities across edits and reorder in an editor snapshot", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(todoSource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTodoCard(snapshot, "todo-1", [
+		{ id: "task-2", text: "Tell everyone", checked: true },
+		{ id: "task-1", text: "Ship **without Markdown**", checked: true },
+	]);
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	const todo = reopened.document.items["todo-1"];
+	assert.equal(todo?.kind, "todo");
+	if (todo?.kind !== "todo") return;
+	assert.deepEqual(todo.tasks, [
+		{ id: "task-2", text: "Tell everyone", checked: true },
+		{ id: "task-1", text: "Ship **without Markdown**", checked: true },
+	]);
+});
+
+test("duplicate task identities block the complete save with an actionable error", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(todoSource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTodoCard(snapshot, "todo-1", [
+		{ id: "task-1", text: "First", checked: false },
+		{ id: "task-1", text: "Duplicate", checked: false },
+	]);
+
+	assert.throws(
+		() => adapter.serializeEditorState(createSnapshotEditorState(snapshot)),
+		/Duplicate to-do task identity task-1 blocks the complete save/,
+	);
 });
 
 test("preserves multi-card source order and untouched Markdown when canvas order and another card change", () => {
@@ -132,7 +228,9 @@ test("preserves multi-card source order and untouched Markdown when canvas order
 	assert.deepEqual(reopened.document.textCardOrder, ["text-2", "text-1"]);
 	assert.equal(reopened.document.items["text-1"]?.placement.order, 0);
 	assert.equal(reopened.document.items["text-1"]?.placement.position.x, 400);
-	assert.equal(reopened.document.items["text-2"]?.markdown, "Second card edited");
+	const reopenedText2 = reopened.document.items["text-2"];
+	assert.equal(reopenedText2?.kind, "text");
+	assert.equal(reopenedText2?.kind === "text" ? reopenedText2.markdown : undefined, "Second card edited");
 	assert.equal(adapter.serializeEditorState(createSnapshotEditorState(snapshot)), saved);
 });
 
@@ -186,8 +284,10 @@ test("creating, editing, closing, and reopening preserves text-card Markdown and
 	assert.equal(reopened.status, "editable");
 	if (reopened.status !== "editable") return;
 	assert.equal(reopened.document.items["text-created"]?.id, "text-created");
+	const reopenedText = reopened.document.items["text-created"];
+	assert.equal(reopenedText?.kind, "text");
 	assert.equal(
-		reopened.document.items["text-created"]?.markdown,
+		reopenedText?.kind === "text" ? reopenedText.markdown : undefined,
 		"A [[link]] and **bold text**",
 	);
 });
@@ -269,6 +369,36 @@ function addSnapshotTextCard(
 			topBarColor: "transparent",
 			topBarCustomColor: "#6b7280",
 			w: 320,
+		},
+	};
+}
+
+function addSnapshotTodoCard(
+	snapshot: BoardspaceSnapshot,
+	id: string,
+	tasks: Array<{ id: string; text: string; checked: boolean }>,
+) {
+	(snapshot.document.store as Record<string, unknown>)[`shape:${id}`] = {
+		id: `shape:${id}`,
+		typeName: "shape",
+		type: "board-todo",
+		parentId: "page:page",
+		index: "a1",
+		opacity: 0.8,
+		x: 80,
+		y: 120,
+		props: {
+			color: "light-green",
+			customColor: "#22c55e",
+			dash: "dashed",
+			fill: "solid",
+			h: 148,
+			size: "l",
+			tasks,
+			title: "Release checklist",
+			topBarColor: "green",
+			topBarCustomColor: "#16a34a",
+			w: 360,
 		},
 	};
 }

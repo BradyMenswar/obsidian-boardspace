@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
 	BoardspaceDocumentV2,
 	BoardspaceTextCard,
+	BoardspaceTodoCard,
 	parseBoardspaceDocument,
 	serializeBoardspaceDocument,
 } from "../src/files/boardspace-document";
@@ -49,6 +50,14 @@ function makeTextCard(id: string, markdown: string, order: number): BoardspaceTe
 			topBarCustomColor: "#6b7280",
 		},
 	};
+}
+
+function textCard(document: BoardspaceDocumentV2, id: string): BoardspaceTextCard {
+	const item = document.items[id];
+	if (item?.kind !== "text") {
+		throw new Error(`Expected text card ${id}.`);
+	}
+	return item;
 }
 
 function makeMultiCardDocument(): BoardspaceDocumentV2 {
@@ -135,7 +144,7 @@ board-version: 2
 
 	assert.equal(parsed.status, "editable");
 	if (parsed.status !== "editable") return;
-	assert.equal(parsed.document.items["text-1"]?.markdown, "# Project notes\n\n- [ ] Keep **Markdown** intact");
+	assert.equal(textCard(parsed.document, "text-1").markdown, "# Project notes\n\n- [ ] Keep **Markdown** intact");
 	assert.deepEqual(parsed.document.textCardOrder, ["text-1"]);
 	assert.equal(serializeBoardspaceDocument(parsed.document), source);
 });
@@ -149,8 +158,82 @@ test("round-trips multiple text-card regions in stable source order with determi
 	assert.equal(parsed.status, "editable");
 	if (parsed.status !== "editable") return;
 	assert.deepEqual(parsed.document.textCardOrder, ["text-b", "text-a"]);
-	assert.equal(parsed.document.items["text-a"]?.markdown, "Alpha  \n\n- untouched");
+	assert.equal(textCard(parsed.document, "text-a").markdown, "Alpha  \n\n- untouched");
 	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
+test("round-trips to-do plain text, placement, preferred size, style, and task order", () => {
+	const todo: BoardspaceTodoCard = {
+		id: "todo-1",
+		kind: "todo",
+		title: "Sprint **tasks**",
+		tasks: [
+			{ id: "task-a", text: "First [[plain text]]", checked: false },
+			{ id: "task-b", text: "Second", checked: true },
+		],
+		placement: { type: "root", order: 0, position: { x: -20, y: 45 } },
+		preferredSize: { width: 340, height: 132 },
+		style: {
+			color: "orange",
+			customColor: "#f97316",
+			dash: "dotted",
+			fill: "pattern",
+			opacity: 0.75,
+			size: "s",
+			topBarColor: "yellow",
+			topBarCustomColor: "#eab308",
+		},
+	};
+	const document: BoardspaceDocumentV2 = {
+		schemaVersion: 2,
+		frontmatterLines: [],
+		items: { "todo-1": todo },
+		textCardOrder: [],
+	};
+	const source = serializeBoardspaceDocument(document);
+	const parsed = parseBoardspaceDocument(source);
+
+	assert.equal(parsed.status, "editable");
+	if (parsed.status !== "editable") return;
+	assert.deepEqual(parsed.document.items["todo-1"], todo);
+	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
+test("rejects duplicate and empty task identities with actionable diagnostics", () => {
+	const todo: BoardspaceTodoCard = {
+		id: "todo-1",
+		kind: "todo",
+		title: "",
+		tasks: [
+			{ id: "task-a", text: "First", checked: false },
+			{ id: "task-b", text: "Second", checked: false },
+		],
+		placement: { type: "root", order: 0, position: { x: 0, y: 0 } },
+		preferredSize: { width: 320, height: 96 },
+		style: makeTextCard("style", "", 0).style,
+	};
+	const source = serializeBoardspaceDocument({
+		schemaVersion: 2,
+		frontmatterLines: [],
+		items: { "todo-1": todo },
+		textCardOrder: [],
+	});
+	const duplicate = parseBoardspaceDocument(source.replace('"id": "task-b"', '"id": "task-a"'));
+	assert.equal(duplicate.status, "read-only");
+	if (duplicate.status === "read-only") {
+		assert.deepEqual(duplicate.diagnostics, [{
+			code: "task-identity-duplicate",
+			message: "To-do task identity task-a appears more than once in this Boardspace document.",
+		}]);
+	}
+	const empty = parseBoardspaceDocument(source.replace('"id": "task-b"', '"id": ""'));
+	assert.equal(empty.status, "read-only");
+	if (empty.status === "read-only") {
+		assert.deepEqual(empty.diagnostics, [{
+			code: "task-identity-invalid",
+			message: "To-do card todo-1 has a task with an empty identity.",
+		}]);
+	}
 });
 
 test("returns exact read-only diagnostics for damaged multi-card region structure without repairing source", () => {
@@ -215,8 +298,8 @@ test("rejects duplicate document-level Markdown identities with exact diagnostic
 
 	for (const duplicate of cases) {
 		const document = makeMultiCardDocument();
-		document.items["text-a"]!.markdown = duplicate.first;
-		document.items["text-b"]!.markdown = duplicate.second;
+		textCard(document, "text-a").markdown = duplicate.first;
+		textCard(document, "text-b").markdown = duplicate.second;
 		const source = serializeBoardspaceDocument(document);
 		const parsed = parseBoardspaceDocument(source);
 
@@ -229,8 +312,8 @@ test("rejects duplicate document-level Markdown identities with exact diagnostic
 
 test("does not treat identifiers shown in text-card code blocks as Markdown definitions", () => {
 	const document = makeMultiCardDocument();
-	document.items["text-a"]!.markdown = "```markdown\nParagraph ^example\n[^example]: Footnote\n```";
-	document.items["text-b"]!.markdown = "Paragraph ^example\n\n[^example]: Footnote";
+	textCard(document, "text-a").markdown = "```markdown\nParagraph ^example\n[^example]: Footnote\n```";
+	textCard(document, "text-b").markdown = "Paragraph ^example\n\n[^example]: Footnote";
 	const source = serializeBoardspaceDocument(document);
 
 	const parsed = parseBoardspaceDocument(source);
@@ -245,16 +328,16 @@ test("keeps Markdown references and definitions scoped to their text card withou
 	const localMarkdown = "Read [the local note][details] and note[^1].\n\n[details]: https://example.com/local\n[^1]: Local footnote";
 	const crossCardReference = "This [reference][remote] and footnote[^remote] have no local definitions.";
 	const otherCardDefinitions = "[remote]: https://example.com/remote\n[^remote]: Another card's footnote";
-	document.items["text-a"]!.markdown = `${localMarkdown}\n\n${crossCardReference}`;
-	document.items["text-b"]!.markdown = otherCardDefinitions;
+	textCard(document, "text-a").markdown = `${localMarkdown}\n\n${crossCardReference}`;
+	textCard(document, "text-b").markdown = otherCardDefinitions;
 	const source = serializeBoardspaceDocument(document);
 
 	const parsed = parseBoardspaceDocument(source);
 
 	assert.equal(parsed.status, "editable");
 	if (parsed.status !== "editable") return;
-	assert.equal(parsed.document.items["text-a"]?.markdown, `${localMarkdown}\n\n${crossCardReference}`);
-	assert.equal(parsed.document.items["text-b"]?.markdown, otherCardDefinitions);
+	assert.equal(textCard(parsed.document, "text-a").markdown, `${localMarkdown}\n\n${crossCardReference}`);
+	assert.equal(textCard(parsed.document, "text-b").markdown, otherCardDefinitions);
 	assert.equal(serializeBoardspaceDocument(parsed.document), source);
 });
 

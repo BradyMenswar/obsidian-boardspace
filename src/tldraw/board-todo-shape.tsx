@@ -516,21 +516,23 @@ function BoardTodoShapeView({ shape }: { shape: BoardTodoShape }) {
 						sourceTask,
 						indicator.index,
 					);
-					editor.updateShape({
-						id: targetShape.id,
-						type: targetShape.type,
-						props: {
-							tasks: targetTasks,
-						},
-					});
-					if (shape.props.tasks.length <= 1) {
-						editor.deleteShapes([shape.id]);
-					} else {
-						updateTodoShape(editor, shape, {
-							tasks: removeBoardTodoTask(shape.props.tasks, currentDrag.sourceIndex),
+					editor.run(() => {
+						editor.updateShape({
+							id: targetShape.id,
+							type: targetShape.type,
+							props: {
+								tasks: targetTasks,
+							},
 						});
-					}
-					editor.select(targetShape.id);
+						if (shape.props.tasks.length <= 1) {
+							editor.deleteShapes([shape.id]);
+						} else {
+							updateTodoShape(editor, shape, {
+								tasks: removeBoardTodoTask(shape.props.tasks, currentDrag.sourceIndex),
+							});
+						}
+						editor.select(targetShape.id);
+					});
 					clearBoardTodoTaskTransferDrag(shape.id);
 					return;
 				}
@@ -541,12 +543,14 @@ function BoardTodoShapeView({ shape }: { shape: BoardTodoShape }) {
 				sourceTask.text.trim().length > 0 &&
 				isPointerInsideElement(editor.getContainer(), event.clientX, event.clientY)
 			) {
-				createBoardTodoShapeFromTaskDrop(editor, shape, sourceTask, {
-					x: event.clientX,
-					y: event.clientY,
-				});
-				updateTodoShape(editor, shape, {
-					tasks: removeBoardTodoTask(shape.props.tasks, currentDrag.sourceIndex),
+				editor.run(() => {
+					createBoardTodoShapeFromTaskDrop(editor, shape, sourceTask, {
+						x: event.clientX,
+						y: event.clientY,
+					});
+					updateTodoShape(editor, shape, {
+						tasks: removeBoardTodoTask(shape.props.tasks, currentDrag.sourceIndex),
+					});
 				});
 			}
 
@@ -878,7 +882,6 @@ function getBoardTodoSizeAdjustments(
 		props: {
 			...shape.props,
 			h: nextHeight,
-			title: "",
 			tasks,
 		},
 	};
@@ -1075,15 +1078,17 @@ function mergeBoardTodoShapeIntoDropTarget(
 		sourceTask,
 		dragState.indicatorIndex,
 	);
-	editor.updateShape({
-		id: targetShape.id,
-		type: targetShape.type,
-		props: {
-			tasks: targetTasks,
-		},
+	editor.run(() => {
+		editor.updateShape({
+			id: targetShape.id,
+			type: targetShape.type,
+			props: {
+				tasks: targetTasks,
+			},
+		});
+		editor.deleteShapes([sourceShape.id]);
+		editor.select(targetShape.id);
 	});
-	editor.deleteShapes([sourceShape.id]);
-	editor.select(targetShape.id);
 }
 
 function updateTodoShape(

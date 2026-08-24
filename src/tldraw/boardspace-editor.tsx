@@ -102,6 +102,7 @@ import {
 	normalizeBoardSwatchColor,
 } from "./board-swatch-shape";
 import { BoardSwatchTool } from "./board-swatch-tool";
+import { registerBoardTodoIdentityNormalization } from "./board-todo-identities";
 import { BoardTodoShape, BoardTodoShapeUtil } from "./board-todo-shape";
 import { BoardTodoTool } from "./board-todo-tool";
 import {
@@ -262,7 +263,7 @@ function BoardspaceEditorInner({
 		setEditor(editor);
 		normalizeToSinglePage(editor);
 		if (snapshot?.kind === "canonical") {
-			createCanonicalTextCards(editor, snapshot);
+			createCanonicalCards(editor, snapshot);
 		}
 		syncTldrawThemeWithObsidian();
 		editor.updateInstanceState({ isGridMode: true });
@@ -275,6 +276,7 @@ function BoardspaceEditorInner({
 		const cleanupDoubleClick =
 			replaceCanvasDoubleClickWithBoardNote(editor);
 		const cleanupColumnLayout = registerBoardColumnAutoLayout(editor);
+		const cleanupTodoIdentities = registerBoardTodoIdentityNormalization(editor);
 		const cleanupMediaCaptions =
 			registerBoardspaceMediaCaptionNormalization(editor);
 		const removeSnapshotListener = editor.store.listen(
@@ -292,6 +294,7 @@ function BoardspaceEditorInner({
 			cleanupGestures?.();
 			cleanupDoubleClick?.();
 			cleanupColumnLayout?.();
+			cleanupTodoIdentities?.();
 			cleanupMediaCaptions?.();
 			removeSnapshotListener();
 		};
@@ -399,32 +402,59 @@ function pickBoardspaceTools(
 	return nextTools;
 }
 
-function createCanonicalTextCards(
+function createCanonicalCards(
 	editor: Editor,
 	state: Extract<BoardspaceEditorState, { kind: "canonical" }>,
 ) {
-	const cards = [...state.textCards].sort((a, b) => a.order - b.order);
+	const cards = [
+		...state.textCards.map((card) => ({ kind: "text" as const, card })),
+		...state.todoCards.map((card) => ({ kind: "todo" as const, card })),
+	].sort((a, b) => a.card.order - b.card.order);
 	editor.createShapes(
-		cards.map((card) => ({
-			id: `shape:${card.id}` as BoardNoteShape["id"],
-			type: "board-note" as const,
-			opacity: card.style.opacity,
-			x: card.position.x,
-			y: card.position.y,
-			props: {
-				color: card.style.color as BoardNoteShape["props"]["color"],
-				customColor: card.style.customColor,
-				dash: card.style.dash as BoardNoteShape["props"]["dash"],
-				fill: card.style.fill as BoardNoteShape["props"]["fill"],
-				h: card.preferredSize.height,
-				markdown: card.markdown,
-				minH: card.preferredSize.height,
-				size: card.style.size as BoardNoteShape["props"]["size"],
-				topBarColor: card.style.topBarColor as BoardNoteShape["props"]["topBarColor"],
-				topBarCustomColor: card.style.topBarCustomColor,
-				w: card.preferredSize.width,
-			},
-		})),
+		cards.map(({ kind, card }) => {
+			if (kind === "todo") {
+				return {
+					id: `shape:${card.id}` as BoardTodoShape["id"],
+					type: "board-todo" as const,
+					opacity: card.style.opacity,
+					x: card.position.x,
+					y: card.position.y,
+					props: {
+						color: card.style.color as BoardTodoShape["props"]["color"],
+						customColor: card.style.customColor,
+						dash: card.style.dash as BoardTodoShape["props"]["dash"],
+						fill: card.style.fill as BoardTodoShape["props"]["fill"],
+						h: card.preferredSize.height,
+						size: card.style.size as BoardTodoShape["props"]["size"],
+						tasks: card.tasks.map((task) => ({ ...task })),
+						title: card.title,
+						topBarColor: card.style.topBarColor as BoardTodoShape["props"]["topBarColor"],
+						topBarCustomColor: card.style.topBarCustomColor,
+						w: card.preferredSize.width,
+					},
+				};
+			}
+			return {
+				id: `shape:${card.id}` as BoardNoteShape["id"],
+				type: "board-note" as const,
+				opacity: card.style.opacity,
+				x: card.position.x,
+				y: card.position.y,
+				props: {
+					color: card.style.color as BoardNoteShape["props"]["color"],
+					customColor: card.style.customColor,
+					dash: card.style.dash as BoardNoteShape["props"]["dash"],
+					fill: card.style.fill as BoardNoteShape["props"]["fill"],
+					h: card.preferredSize.height,
+					markdown: card.markdown,
+					minH: card.preferredSize.height,
+					size: card.style.size as BoardNoteShape["props"]["size"],
+					topBarColor: card.style.topBarColor as BoardNoteShape["props"]["topBarColor"],
+					topBarCustomColor: card.style.topBarCustomColor,
+					w: card.preferredSize.width,
+				},
+			};
+		}),
 	);
 }
 

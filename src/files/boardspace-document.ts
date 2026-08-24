@@ -37,10 +37,8 @@ export interface BoardspaceTextCardStyle {
 	topBarCustomColor: string;
 }
 
-export interface BoardspaceTextCard {
+interface BoardspaceRootCard {
 	id: string;
-	kind: "text";
-	markdown: string;
 	placement: {
 		type: "root";
 		order: number;
@@ -50,9 +48,28 @@ export interface BoardspaceTextCard {
 	style: BoardspaceTextCardStyle;
 }
 
+export interface BoardspaceTextCard extends BoardspaceRootCard {
+	kind: "text";
+	markdown: string;
+}
+
+export interface BoardspaceTodoTask {
+	id: string;
+	text: string;
+	checked: boolean;
+}
+
+export interface BoardspaceTodoCard extends BoardspaceRootCard {
+	kind: "todo";
+	title: string;
+	tasks: BoardspaceTodoTask[];
+}
+
+export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard;
+
 export interface BoardspaceDocumentV2 {
 	schemaVersion: typeof BOARDSPACE_SCHEMA_VERSION;
-	items: Record<string, BoardspaceTextCard>;
+	items: Record<string, BoardspaceCanvasItem>;
 	textCardOrder: string[];
 	frontmatterLines: string[];
 }
@@ -74,6 +91,8 @@ export interface BoardspaceDocumentDiagnostic {
 		| "text-card-region-malformed"
 		| "text-card-region-missing"
 		| "text-card-region-orphan"
+		| "task-identity-invalid"
+		| "task-identity-duplicate"
 		| "markdown-block-identity-duplicate"
 		| "markdown-footnote-definition-duplicate"
 		| "index-projection-malformed";
@@ -177,14 +196,15 @@ export function parseBoardspaceDocument(
 }
 
 export function serializeBoardspaceDocument(document: BoardspaceDocumentV2): string {
+	assertValidTaskIdentities(document.items);
 	const unrelatedFrontmatter = document.frontmatterLines.length > 0
 		? `\n${document.frontmatterLines.join("\n")}`
 		: "";
 	const regions = document.textCardOrder
 		.map((id) => {
 			const item = document.items[id];
-			if (!item) {
-				throw new Error(`Text-card source order references missing item: ${id}.`);
+			if (!item || item.kind !== "text") {
+				throw new Error(`Text-card source order references missing text item: ${id}.`);
 			}
 			return `<!-- boardspace-text-card:start ${id} -->\n${item.markdown}\n<!-- boardspace-text-card:end ${id} -->`;
 		})
@@ -192,7 +212,7 @@ export function serializeBoardspaceDocument(document: BoardspaceDocumentV2): str
 	const structuredItems = Object.fromEntries(
 		Object.keys(document.items).sort().map((id) => [
 			id,
-			toStructuredTextCard(document.items[id]!),
+			toStructuredCard(document.items[id]!),
 		]),
 	);
 	const structuredData = JSON.stringify(
@@ -244,7 +264,7 @@ function validateStructuredData(
 	value: unknown,
 	regions: Map<string, string>,
 ):
-	| { status: "valid"; items: Record<string, BoardspaceTextCard>; textCardOrder: string[] }
+	| { status: "valid"; items: Record<string, BoardspaceCanvasItem>; textCardOrder: string[] }
 	| { status: "invalid"; diagnostic: BoardspaceDocumentDiagnostic } {
 	if (
 		!isRecord(value) ||
@@ -264,34 +284,54 @@ function validateStructuredData(
 		if (!KNOWN_ITEM_KINDS.has(item.kind)) {
 			return invalid("unknown-item-kind", `Unknown Boardspace canvas item kind: ${item.kind}.`);
 		}
-		if (item.kind !== "text") {
+		if (item.kind !== "text" && item.kind !== "todo") {
 			return invalid("canvas-content-not-supported", `Boardspace canvas item kind ${item.kind} is not supported yet.`);
 		}
 	}
 
-	const items: Record<string, BoardspaceTextCard> = {};
+	const items: Record<string, BoardspaceCanvasItem> = {};
+	const taskIds = new Set<string>();
 	for (const [key, rawItem] of entries) {
-		if (!isTextCardData(key, rawItem)) {
-			return invalidData("A Boardspace text card is malformed.");
+		if (isRecord(rawItem) && rawItem.kind === "text") {
+			if (!isTextCardData(key, rawItem)) {
+				return invalidData(`Boardspace text card ${key} is malformed.`);
+			}
+			const markdown = regions.get(key);
+			if (markdown === undefined) {
+				return invalid("text-card-region-missing", `Text card ${key} has no Markdown region.`);
+			}
+			items[key] = { ...rawItem, markdown };
+			continue;
 		}
-		const markdown = regions.get(key);
-		if (markdown === undefined) {
-			return invalid("text-card-region-missing", `Text card ${key} has no Markdown region.`);
+		if (!isTodoCardData(key, rawItem)) {
+			return invalidData(`Boardspace to-do card ${key} is malformed.`);
 		}
-		items[key] = { ...rawItem, markdown };
+		for (const task of rawItem.tasks) {
+			if (task.id.trim().length === 0) {
+				return invalid("task-identity-invalid", `To-do card ${key} has a task with an empty identity.`);
+			}
+			if (taskIds.has(task.id)) {
+				return invalid("task-identity-duplicate", `To-do task identity ${task.id} appears more than once in this Boardspace document.`);
+			}
+			taskIds.add(task.id);
+		}
+		items[key] = rawItem;
 	}
 
 	for (const id of regions.keys()) {
-		if (!items[id]) {
+		if (items[id]?.kind !== "text") {
 			return invalid("text-card-region-orphan", `Markdown region ${id} has no text-card record.`);
 		}
 	}
 
 	const textCardOrder = value.textCardOrder;
+	const textCardIds = entries
+		.filter(([, item]) => isRecord(item) && item.kind === "text")
+		.map(([id]) => id);
 	if (
-		textCardOrder.length !== entries.length ||
+		textCardOrder.length !== textCardIds.length ||
 		new Set(textCardOrder).size !== textCardOrder.length ||
-		textCardOrder.some((id) => !items[id])
+		textCardOrder.some((id) => items[id]?.kind !== "text")
 	) {
 		return invalidData("Text-card source order does not match the text-card records.");
 	}
@@ -303,7 +343,8 @@ function validateStructuredData(
 	return { status: "valid", items, textCardOrder: [...textCardOrder] };
 }
 
-function toStructuredTextCard(item: BoardspaceTextCard): Omit<BoardspaceTextCard, "markdown"> {
+function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard {
+	if (item.kind === "todo") return item;
 	return {
 		id: item.id,
 		kind: item.kind,
@@ -314,8 +355,20 @@ function toStructuredTextCard(item: BoardspaceTextCard): Omit<BoardspaceTextCard
 }
 
 function isTextCardData(key: string, value: unknown): value is Omit<BoardspaceTextCard, "markdown"> {
-	if (!isRecord(value) || !hasOnlyKeys(value, ["id", "kind", "placement", "preferredSize", "style"])) return false;
-	if (value.id !== key || value.kind !== "text" || !isRecord(value.placement) || !isRecord(value.preferredSize) || !isRecord(value.style)) return false;
+	return isRecord(value) &&
+		hasOnlyKeys(value, ["id", "kind", "placement", "preferredSize", "style"]) &&
+		value.id === key && value.kind === "text" && isRootCardData(value);
+}
+
+function isTodoCardData(key: string, value: unknown): value is BoardspaceTodoCard {
+	if (!isRecord(value) || !hasOnlyKeys(value, ["id", "kind", "title", "tasks", "placement", "preferredSize", "style"])) return false;
+	if (value.id !== key || value.kind !== "todo" || typeof value.title !== "string" || !Array.isArray(value.tasks)) return false;
+	if (!value.tasks.every((task) => isRecord(task) && hasOnlyKeys(task, ["id", "text", "checked"]) && typeof task.id === "string" && typeof task.text === "string" && typeof task.checked === "boolean")) return false;
+	return isRootCardData(value);
+}
+
+function isRootCardData(value: Record<string, unknown>) {
+	if (!isRecord(value.placement) || !isRecord(value.preferredSize) || !isRecord(value.style)) return false;
 	const placement = value.placement;
 	const preferredSize = value.preferredSize;
 	const style = value.style;
@@ -330,6 +383,22 @@ function isTextCardData(key: string, value: unknown): value is Omit<BoardspaceTe
 		isFiniteNumber(style.opacity) && style.opacity >= 0 && style.opacity <= 1 &&
 		typeof style.size === "string" && SIZES.has(style.size) && typeof style.topBarColor === "string" && TOP_BAR_COLORS.has(style.topBarColor) &&
 		typeof style.topBarCustomColor === "string";
+}
+
+function assertValidTaskIdentities(items: Record<string, BoardspaceCanvasItem>) {
+	const taskIds = new Set<string>();
+	for (const item of Object.values(items)) {
+		if (item.kind !== "todo") continue;
+		for (const task of item.tasks) {
+			if (task.id.trim().length === 0) {
+				throw new Error(`To-do card ${item.id} has a task with an empty identity; the complete save was blocked.`);
+			}
+			if (taskIds.has(task.id)) {
+				throw new Error(`Duplicate to-do task identity ${task.id} blocks the complete save.`);
+			}
+			taskIds.add(task.id);
+		}
+	}
 }
 
 function parseReservedFrontmatter(rawFrontmatter: string):
