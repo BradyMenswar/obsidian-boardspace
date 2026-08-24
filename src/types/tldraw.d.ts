@@ -4,7 +4,6 @@ import type {
 	TLDefaultDashStyle,
 	TLDefaultFillStyle,
 	TLDefaultSizeStyle,
-	TLRichText,
 } from "@tldraw/tlschema";
 
 type BoardspaceShapeColor = TLDefaultColorStyle | "custom";
@@ -33,7 +32,7 @@ declare module "@tldraw/tlschema" {
 			fill: TLDefaultFillStyle;
 			h: number;
 			minH: number;
-			richText: TLRichText;
+			markdown: string;
 			size: TLDefaultSizeStyle;
 			topBarColor: BoardspaceTopBarColor;
 			topBarCustomColor: string;

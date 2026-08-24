@@ -10,41 +10,30 @@ import {
 	getColorValue,
 	getDefaultColorTheme,
 	HTMLContainer,
-	isEqual,
 	LABEL_FONT_SIZES,
-	renderHtmlFromRichTextForMeasurement,
-	renderPlaintextFromRichText,
-	RichTextLabel,
 	resizeBox,
 	T,
 	TLDefaultDashStyle,
 	TLDefaultFillStyle,
-	TLDefaultSizeStyle,
 	TLRichText,
 	TLResizeInfo,
 	TLShape,
 	TEXT_PROPS,
 	defaultColorNames,
-	richTextValidator,
 	toRichText,
 	useEditor,
 	useIsEditing,
 	useValue,
 	StyleProp,
 } from "tldraw";
-import {
-	CSSProperties,
-	useEffect,
-	useLayoutEffect,
-	useMemo,
-	useRef,
-} from "react";
+import { CSSProperties, useMemo } from "react";
 import {
 	BOARD_NOTE_DEFAULT_WIDTH,
 	BOARD_NOTE_MIN_HEIGHT,
 	BOARD_NOTE_MIN_WIDTH,
 	snapBoardNoteWidth,
 } from "./board-note-config";
+import { BoardTextCardContent } from "./board-text-card-content";
 import {
 	clearBoardColumnDrag,
 	getBoardColumnDragState,
@@ -113,6 +102,7 @@ const boardNoteShapeVersions = createShapePropsMigrationIds("board-note", {
 	AddTopBar: 3,
 	UseRichText: 4,
 	AddDash: 5,
+	UseMarkdown: 6,
 });
 
 const boardNoteShapeMigrations = createShapePropsMigrationSequence({
@@ -168,6 +158,17 @@ const boardNoteShapeMigrations = createShapePropsMigrationSequence({
 			},
 			down: ({ dash: _dash, ...props }) => props,
 		},
+		{
+			id: boardNoteShapeVersions.UseMarkdown,
+			up: (props) => {
+				props.markdown = getLegacyMarkdownFromRichText(props.richText as TLRichText | undefined);
+				delete props.richText;
+			},
+			down: ({ markdown, ...props }) => {
+				props.richText = toRichText(typeof markdown === "string" ? markdown : "");
+				return props;
+			},
+		},
 	],
 });
 
@@ -181,7 +182,7 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 		fill: DefaultFillStyle,
 		h: T.number,
 		minH: T.number,
-		richText: richTextValidator,
+		markdown: T.string,
 		size: DefaultSizeStyle,
 		topBarColor: BoardNoteTopBarColorStyle,
 		topBarCustomColor: BoardNoteTopBarCustomColorStyle,
@@ -202,7 +203,7 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 			fill: "semi",
 			h: BOARD_NOTE_MIN_HEIGHT,
 			minH: BOARD_NOTE_MIN_HEIGHT,
-			richText: toRichText(""),
+			markdown: "",
 			size: "m",
 			topBarColor: BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
 			topBarCustomColor: BOARDSPACE_DEFAULT_CUSTOM_COLOR,
@@ -244,7 +245,7 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 	}
 
 	override getText(shape: BoardNoteShape) {
-		return renderPlaintextFromRichText(this.editor, shape.props.richText);
+		return shape.props.markdown;
 	}
 
 	override onBeforeCreate(shape: BoardNoteShape) {
@@ -256,7 +257,7 @@ export class BoardNoteShapeUtil extends BaseBoxShapeUtil<BoardNoteShape> {
 			prev.props.minH === next.props.minH &&
 			prev.props.size === next.props.size &&
 			prev.props.w === next.props.w &&
-			isEqual(prev.props.richText, next.props.richText)
+			prev.props.markdown === next.props.markdown
 		) {
 			return;
 		}
@@ -351,16 +352,8 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 		() => editor.user.getIsDarkMode(),
 		[editor],
 	);
-	const isSelected = useValue(
-		"board-note-selected",
-		() => editor.getSelectedShapeIds().includes(shape.id),
-		[editor, shape.id],
-	);
-	const text = useMemo(
-		() => renderPlaintextFromRichText(editor, shape.props.richText),
-		[editor, shape.props.richText],
-	);
-	const hasContent = text.trim().length > 0;
+	const markdown = shape.props.markdown;
+	const hasContent = markdown.trim().length > 0;
 	const cardStyles = useMemo(
 		() =>
 			getBoardNoteCardStyles(
@@ -427,14 +420,14 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 				return;
 			}
 
-			if (text.trim().length > 0) {
+			if (markdown.trim().length > 0) {
 				return;
 			}
 
 			event.preventDefault();
 			removeBoardspaceMediaCaption(editor, parentMedia.id);
 		};
-	}, [editor, parentMedia, shape, text]);
+	}, [editor, markdown, parentMedia, shape]);
 
 	return (
 		<HTMLContainer
@@ -480,23 +473,22 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 						Start typing...
 					</div>
 				) : (
-					<div className="boardspace-note-shape__text-shell">
-						<RichTextLabel
-							shapeId={shape.id}
-							type={shape.type}
-							richText={shape.props.richText}
-							font="sans"
-							fontSize={LABEL_FONT_SIZES[shape.props.size]}
-							lineHeight={TEXT_PROPS.lineHeight}
-							align="start"
-							verticalAlign="middle"
-							wrap={true}
-							isSelected={isSelected}
-							labelColor={textColor}
-							padding={0}
-							classNamePrefix="boardspace-note-shape__text"
-							showTextOutline={false}
+					<div
+						className="boardspace-note-shape__text-shell"
+						style={{ color: textColor }}
+					>
+						<BoardTextCardContent
+							isEditing={isEditing}
+							markdown={markdown}
+							onChange={(nextMarkdown) => {
+								editor.updateShape({
+									id: shape.id,
+									type: shape.type,
+									props: { markdown: nextMarkdown },
+								});
+							}}
 							onKeyDown={handleKeyDown}
+							onStopEditing={() => editor.setEditingShape(null)}
 						/>
 					</div>
 				)}
@@ -512,7 +504,6 @@ export function getBoardNoteCardStyles(
 	fill: TLDefaultFillStyle,
 	isDarkMode: boolean,
 ) : CSSProperties {
-	const theme = getDefaultColorTheme({ isDarkMode });
 	const patternColor = getBoardspaceColorValue(
 		color,
 		customColor,
@@ -687,17 +678,18 @@ export function getBoardNoteMeasuredHeight(editor: Editor, shape: BoardNoteShape
 		shape.props.w - BOARD_NOTE_PADDING * 2 - BOARD_NOTE_MEASUREMENT_FUZZ,
 	);
 
-	const plainText = renderPlaintextFromRichText(editor, shape.props.richText);
-	if (!plainText.trim()) {
+	if (!shape.props.markdown.trim()) {
 		return minTextHeight + BOARD_NOTE_PADDING * 2;
 	}
 
-	const html = renderHtmlFromRichTextForMeasurement(editor, shape.props.richText);
-	const textSize = editor.textMeasure.measureHtml(html, {
-		...TEXT_PROPS,
+	const textSize = editor.textMeasure.measureText(shape.props.markdown, {
 		fontFamily: FONT_FAMILIES.sans,
 		fontSize,
+		fontStyle: "normal",
+		fontWeight: "normal",
+		lineHeight: TEXT_PROPS.lineHeight,
 		maxWidth: availableWidth,
+		padding: "0",
 	});
 
 	return Math.ceil(textSize.h) + BOARD_NOTE_PADDING * 2;

@@ -4,8 +4,6 @@ import {
 	StateNode,
 	createShapeId,
 	maybeSnapToGrid,
-	startEditingShapeWithRichText,
-	toRichText,
 	Vec,
 } from "tldraw";
 import {
@@ -70,7 +68,7 @@ export function createBoardNoteShapeAtPoint(
 					: "semi",
 			h: BOARD_NOTE_MIN_HEIGHT,
 			minH: BOARD_NOTE_MIN_HEIGHT,
-			richText: toRichText(""),
+			markdown: "",
 			size: editor.getStyleForNextShape(DefaultSizeStyle),
 			topBarColor: editor.getStyleForNextShape(BoardNoteTopBarColorStyle),
 			topBarCustomColor: editor.getStyleForNextShape(
@@ -117,6 +115,6 @@ export function focusBoardNoteForTyping(
 		}
 
 		editor.select(shapeId);
-		startEditingShapeWithRichText(editor, shapeId, { selectAll: true });
+		editor.setEditingShape(shapeId);
 	});
 }

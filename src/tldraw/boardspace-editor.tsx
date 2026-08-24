@@ -1,4 +1,8 @@
 import { TFile } from "obsidian";
+import {
+	BoardspaceEditorState,
+	createSnapshotEditorState,
+} from "../files/boardspace-document-adapter";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
 	BoardspaceFileProvider,
@@ -35,9 +39,7 @@ import {
 	Editor,
 	SelectTool,
 	TLParentId,
-	TLShape,
 	TLShapePartial,
-	TLEditorSnapshot,
 	TLComponents,
 	TldrawUiButtonIcon,
 	TldrawUiGrid,
@@ -128,8 +130,8 @@ interface BoardspaceEditorProps {
 	file: TFile | null;
 	isActive: boolean;
 	loadKey: string;
-	onSnapshotChange?: (snapshot: TLEditorSnapshot) => void;
-	snapshot?: TLEditorSnapshot;
+	onSnapshotChange?: (state: BoardspaceEditorState) => void;
+	snapshot?: BoardspaceEditorState;
 }
 
 const BOARDSPACE_COMPONENTS: TLComponents = {
@@ -259,6 +261,9 @@ function BoardspaceEditorInner({
 	const handleMount = (editor: Editor) => {
 		setEditor(editor);
 		normalizeToSinglePage(editor);
+		if (snapshot?.kind === "canonical") {
+			createCanonicalTextCards(editor, snapshot);
+		}
 		syncTldrawThemeWithObsidian();
 		editor.updateInstanceState({ isGridMode: true });
 
@@ -274,7 +279,7 @@ function BoardspaceEditorInner({
 			registerBoardspaceMediaCaptionNormalization(editor);
 		const removeSnapshotListener = editor.store.listen(
 			() => {
-				onSnapshotChange?.(editor.getSnapshot());
+				onSnapshotChange?.(createSnapshotEditorState(editor.getSnapshot()));
 			},
 			{ source: "user", scope: "document" },
 		);
@@ -309,7 +314,7 @@ function BoardspaceEditorInner({
 					options={BOARDSPACE_OPTIONS}
 					overrides={BOARDSPACE_OVERRIDES}
 					shapeUtils={BOARDSPACE_SHAPES}
-					snapshot={snapshot}
+					snapshot={snapshot?.kind === "snapshot" ? snapshot.snapshot : undefined}
 					tools={BOARDSPACE_TOOLS}
 				/>
 			</BoardspaceFileProvider>
@@ -392,6 +397,35 @@ function pickBoardspaceTools(
 	};
 
 	return nextTools;
+}
+
+function createCanonicalTextCards(
+	editor: Editor,
+	state: Extract<BoardspaceEditorState, { kind: "canonical" }>,
+) {
+	const cards = [...state.textCards].sort((a, b) => a.order - b.order);
+	editor.createShapes(
+		cards.map((card) => ({
+			id: `shape:${card.id}` as BoardNoteShape["id"],
+			type: "board-note" as const,
+			opacity: card.style.opacity,
+			x: card.position.x,
+			y: card.position.y,
+			props: {
+				color: card.style.color as BoardNoteShape["props"]["color"],
+				customColor: card.style.customColor,
+				dash: card.style.dash as BoardNoteShape["props"]["dash"],
+				fill: card.style.fill as BoardNoteShape["props"]["fill"],
+				h: card.preferredSize.height,
+				markdown: card.markdown,
+				minH: card.preferredSize.height,
+				size: card.style.size as BoardNoteShape["props"]["size"],
+				topBarColor: card.style.topBarColor as BoardNoteShape["props"]["topBarColor"],
+				topBarCustomColor: card.style.topBarCustomColor,
+				w: card.preferredSize.width,
+			},
+		})),
+	);
 }
 
 function normalizeToSinglePage(editor: Editor) {

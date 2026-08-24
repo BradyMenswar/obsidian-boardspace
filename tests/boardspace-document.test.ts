@@ -45,6 +45,67 @@ test("round-trips an empty schema-v2 Boardspace document deterministically", () 
 	assert.equal(serializeBoardspaceDocument(reparsed.document), EMPTY_DOCUMENT);
 });
 
+test("round-trips one raw-Markdown text card with canonical placement and style", () => {
+	const source = `---
+type: boardspace
+board-version: 2
+---
+
+<!-- boardspace-text-card:start text-1 -->
+# Project notes
+
+- [ ] Keep **Markdown** intact
+<!-- boardspace-text-card:end text-1 -->
+
+\`\`\`boardspace
+{
+  "items": {
+    "text-1": {
+      "id": "text-1",
+      "kind": "text",
+      "placement": {
+        "type": "root",
+        "order": 0,
+        "position": {
+          "x": 120,
+          "y": 80
+        }
+      },
+      "preferredSize": {
+        "width": 320,
+        "height": 96
+      },
+      "style": {
+        "color": "blue",
+        "customColor": "#6b7280",
+        "dash": "solid",
+        "fill": "semi",
+        "opacity": 1,
+        "size": "m",
+        "topBarColor": "transparent",
+        "topBarCustomColor": "#6b7280"
+      }
+    }
+  },
+  "textCardOrder": [
+    "text-1"
+  ]
+}
+\`\`\`
+
+<!-- boardspace-index:start -->
+<!-- boardspace-index:end -->
+`;
+
+	const parsed = parseBoardspaceDocument(source);
+
+	assert.equal(parsed.status, "editable");
+	if (parsed.status !== "editable") return;
+	assert.equal(parsed.document.items["text-1"]?.markdown, "# Project notes\n\n- [ ] Keep **Markdown** intact");
+	assert.deepEqual(parsed.document.textCardOrder, ["text-1"]);
+	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
 test("preserves unrelated frontmatter properties and values", () => {
 	const source = EMPTY_DOCUMENT.replace(
 		"board-version: 2\n",

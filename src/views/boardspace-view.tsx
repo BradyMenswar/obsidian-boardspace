@@ -1,7 +1,9 @@
 import { AppContext } from "context/app-context";
-import { createSchemaV2BoardspaceDocumentAdapter } from "files/boardspace-document-adapter";
+import {
+	BoardspaceEditorState,
+	createSchemaV2BoardspaceDocumentAdapter,
+} from "files/boardspace-document-adapter";
 import { BoardspaceDocumentLifecycle } from "files/boardspace-document-lifecycle";
-import { TLEditorSnapshot } from "tldraw";
 import { Menu, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import { Root, createRoot } from "react-dom/client";
 import { BOARDSPACE_VIEW_TYPE } from "types/board";
@@ -16,7 +18,7 @@ export class BoardView extends TextFileView {
 	private isLeafActive = false;
 	private renderVersion = 0;
 	private hasShownUnsafeSaveNotice = false;
-	private readonly documentLifecycle: BoardspaceDocumentLifecycle<TLEditorSnapshot>;
+	private readonly documentLifecycle: BoardspaceDocumentLifecycle<BoardspaceEditorState>;
 
 	constructor(plugin: BoardspacePlugin, leaf: WorkspaceLeaf) {
 		super(leaf);
@@ -48,7 +50,7 @@ export class BoardView extends TextFileView {
 	}
 
 	setViewData(data: string, clear: boolean) {
-		const outcome = this.documentLifecycle.loadSource(data);
+		this.documentLifecycle.loadSource(data);
 		this.renderVersion += 1;
 
 		this.renderView();
@@ -157,8 +159,8 @@ export class BoardView extends TextFileView {
 		);
 	}
 
-	private readonly handleSnapshotChange = (snapshot: TLEditorSnapshot) => {
-		const outcome = this.documentLifecycle.updateEditorState(snapshot);
+	private readonly handleSnapshotChange = (state: BoardspaceEditorState) => {
+		const outcome = this.documentLifecycle.updateEditorState(state);
 		if (outcome.status === "save-blocked") {
 			this.showUnsafeSaveNotice();
 		}

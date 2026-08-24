@@ -18,7 +18,6 @@ import {
 	TLUiOverrideHelpers,
 	TLUiStylePanelProps,
 	TldrawUiMenuActionItem,
-	toRichText,
 	useEditor,
 	useValue,
 } from "tldraw";
@@ -490,7 +489,7 @@ function ensureBoardspaceMediaCaption(
 			fill: "semi",
 			h: BOARD_NOTE_MIN_HEIGHT,
 			minH: BOARD_NOTE_MIN_HEIGHT,
-			richText: toRichText(""),
+			markdown: "",
 			size: editor.getStyleForNextShape(DefaultSizeStyle),
 			topBarColor: BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
 			topBarCustomColor: editor.getStyleForNextShape(
