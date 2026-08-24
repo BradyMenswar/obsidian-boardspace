@@ -1,4 +1,5 @@
 import { TLEditorSnapshot } from "tldraw";
+import type { BoardspaceDocumentAdapter } from "./boardspace-document-lifecycle";
 import {
 	BOARDSPACE_FILE_LANGUAGE,
 	BOARDSPACE_FILE_VERSION,
@@ -18,6 +19,7 @@ const BOARDSPACE_LINKS_START = "<!-- boardspace-links:start -->";
 const BOARDSPACE_LINKS_END = "<!-- boardspace-links:end -->";
 
 interface BoardspaceFileParseResult {
+	status: "loaded" | "empty" | "invalid";
 	snapshot: BoardspaceSnapshot | undefined;
 	version: number | undefined;
 }
@@ -36,6 +38,7 @@ export function parseBoardspaceFileWithMetadata(
 	const match = fileContents.match(BOARDSPACE_BLOCK_PATTERN);
 	if (!match) {
 		return {
+			status: "invalid",
 			snapshot: undefined,
 			version: readBoardspaceVersion(fileContents),
 		};
@@ -44,6 +47,7 @@ export function parseBoardspaceFileWithMetadata(
 	const rawSnapshot = match[1]?.trim();
 	if (!rawSnapshot || rawSnapshot === "null") {
 		return {
+			status: "empty",
 			snapshot: undefined,
 			version: readBoardspaceVersion(fileContents),
 		};
@@ -51,12 +55,15 @@ export function parseBoardspaceFileWithMetadata(
 
 	try {
 		const parsed = JSON.parse(rawSnapshot) as unknown;
+		const snapshot = isBoardspaceSnapshot(parsed) ? parsed : undefined;
 		return {
-			snapshot: isBoardspaceSnapshot(parsed) ? parsed : undefined,
+			status: snapshot ? "loaded" : "invalid",
+			snapshot,
 			version: readBoardspaceVersion(fileContents),
 		};
 	} catch {
 		return {
+			status: "invalid",
 			snapshot: undefined,
 			version: readBoardspaceVersion(fileContents),
 		};
@@ -84,6 +91,29 @@ ${backlinkSection}
 
 export function isSupportedBoardspaceVersion(version: number | undefined) {
 	return version === BOARDSPACE_FILE_VERSION;
+}
+
+export function createLegacyBoardspaceDocumentAdapter(
+): BoardspaceDocumentAdapter<BoardspaceSnapshot> {
+	return {
+		loadSource(source) {
+			const result = parseBoardspaceFileWithMetadata(source);
+			if (!isSupportedBoardspaceVersion(result.version)) {
+				return {
+					status: "read-only",
+					sourceStatus: "unsupported",
+					editorState: undefined,
+				};
+			}
+
+			return {
+				status: "editable",
+				sourceStatus: result.status,
+				editorState: result.snapshot,
+			};
+		},
+		serializeEditorState: serializeBoardspaceFile,
+	};
 }
 
 function readBoardspaceVersion(fileContents: string): number | undefined {

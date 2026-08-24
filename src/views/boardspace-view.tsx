@@ -1,9 +1,6 @@
 import { AppContext } from "context/app-context";
-import {
-	isSupportedBoardspaceVersion,
-	parseBoardspaceFileWithMetadata,
-	serializeBoardspaceFile,
-} from "files/boardspace-file";
+import { createLegacyBoardspaceDocumentAdapter } from "files/boardspace-file";
+import { BoardspaceDocumentLifecycle } from "files/boardspace-document-lifecycle";
 import { TLEditorSnapshot } from "tldraw";
 import { Menu, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
 import { Root, createRoot } from "react-dom/client";
@@ -18,20 +15,28 @@ export class BoardView extends TextFileView {
 	private reactHost: HTMLDivElement | null = null;
 	private isLeafActive = false;
 	private renderVersion = 0;
-	private saveTimer: number | null = null;
-	private savePromise: Promise<void> = Promise.resolve();
-	private snapshot: TLEditorSnapshot | undefined;
-	private sourceData = "";
-	private isBoardspaceDocument = false;
 	private hasShownUnsafeSaveNotice = false;
+	private readonly documentLifecycle: BoardspaceDocumentLifecycle<TLEditorSnapshot>;
 
 	constructor(plugin: BoardspacePlugin, leaf: WorkspaceLeaf) {
 		super(leaf);
 		this.plugin = plugin;
+		this.documentLifecycle = new BoardspaceDocumentLifecycle({
+			documentAdapter: createLegacyBoardspaceDocumentAdapter(),
+			requestSave: async () => this.save(false),
+			scheduler: {
+				schedule: (callback, delay) => window.setTimeout(callback, delay),
+				cancel: (handle) => window.clearTimeout(handle),
+			},
+			onSaveError: (error) => {
+				console.error("Boardspace failed to save.", error);
+				new Notice("Boardspace failed to save. Check the developer console for details.");
+			},
+		});
 	}
 
 	clear() {
-		this.snapshot = undefined;
+		this.documentLifecycle.clearEditorState();
 	}
 
 	getViewType() {
@@ -39,21 +44,14 @@ export class BoardView extends TextFileView {
 	}
 
 	getViewData() {
-		if (!this.isBoardspaceDocument) {
-			return this.sourceData;
-		}
-
-		return serializeBoardspaceFile(this.snapshot);
+		return this.documentLifecycle.getViewData();
 	}
 
 	setViewData(data: string, clear: boolean) {
-		const { snapshot, version } = parseBoardspaceFileWithMetadata(data);
-		this.sourceData = data;
-		this.isBoardspaceDocument = isSupportedBoardspaceVersion(version);
-		this.snapshot = snapshot;
+		const outcome = this.documentLifecycle.loadSource(data);
 		this.renderVersion += 1;
 
-		if (!this.isBoardspaceDocument && data.trim().length > 0) {
+		if (outcome.status === "read-only" && data.trim().length > 0) {
 			this.showUnsafeSaveNotice();
 		}
 
@@ -119,7 +117,7 @@ export class BoardView extends TextFileView {
 	}
 
 	async onClose() {
-		await this.flushPendingSave();
+		await this.documentLifecycle.flushPendingSave();
 		this.contentEl.removeClass("boardspace-view");
 		this.contentEl.style.removeProperty("padding");
 		this.root?.unmount();
@@ -133,6 +131,7 @@ export class BoardView extends TextFileView {
 			return;
 		}
 
+		const loadOutcome = this.documentLifecycle.getLoadOutcome();
 		this.root.render(
 			<AppContext.Provider value={this.app}>
 				<BoardspaceEditor
@@ -140,61 +139,18 @@ export class BoardView extends TextFileView {
 					isActive={this.isLeafActive}
 					loadKey={`${this.file?.path ?? "boardspace"}:${this.renderVersion}`}
 					onSnapshotChange={this.handleSnapshotChange}
-					snapshot={this.snapshot}
+					snapshot={loadOutcome?.editorState}
 				/>
 			</AppContext.Provider>,
 		);
 	}
 
 	private readonly handleSnapshotChange = (snapshot: TLEditorSnapshot) => {
-		if (!this.isBoardspaceDocument) {
+		const outcome = this.documentLifecycle.updateEditorState(snapshot);
+		if (outcome.status === "save-blocked") {
 			this.showUnsafeSaveNotice();
-			return;
 		}
-
-		this.snapshot = snapshot;
-		this.queueSave();
 	};
-
-	private queueSave() {
-		if (this.saveTimer !== null) {
-			window.clearTimeout(this.saveTimer);
-		}
-
-		this.saveTimer = window.setTimeout(() => {
-			this.saveTimer = null;
-			void this.persistPendingSave();
-		}, 150);
-	}
-
-	private async flushPendingSave() {
-		if (this.saveTimer !== null) {
-			window.clearTimeout(this.saveTimer);
-			this.saveTimer = null;
-			await this.persistPendingSave();
-			return;
-		}
-
-		await this.savePromise;
-	}
-
-	private async persistPendingSave() {
-		if (!this.isBoardspaceDocument) {
-			this.showUnsafeSaveNotice();
-			return;
-		}
-
-		this.savePromise = this.savePromise
-			.then(async () => {
-				await this.save(false);
-			})
-			.catch((error) => {
-				console.error("Boardspace failed to save.", error);
-				new Notice("Boardspace failed to save. Check the developer console for details.");
-			});
-
-		await this.savePromise;
-	}
 
 	private showUnsafeSaveNotice() {
 		if (this.hasShownUnsafeSaveNotice) {
