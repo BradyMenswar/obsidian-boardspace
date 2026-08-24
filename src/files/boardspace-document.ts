@@ -1,3 +1,5 @@
+import { validateTextCardMarkdownNamespaces } from "./boardspace-markdown";
+
 export const BOARDSPACE_SCHEMA_VERSION = 2 as const;
 
 const STRUCTURED_BLOCK_PATTERN = /^```boardspace[ \t]*\r?\n([\s\S]*?)^```[ \t]*$/gm;
@@ -72,6 +74,8 @@ export interface BoardspaceDocumentDiagnostic {
 		| "text-card-region-malformed"
 		| "text-card-region-missing"
 		| "text-card-region-orphan"
+		| "markdown-block-identity-duplicate"
+		| "markdown-footnote-definition-duplicate"
 		| "index-projection-malformed";
 	message: string;
 }
@@ -155,6 +159,10 @@ export function parseBoardspaceDocument(
 	const validation = validateStructuredData(structuredData, regionsResult.regions);
 	if (validation.status === "invalid") {
 		return { status: "read-only", source, diagnostics: [validation.diagnostic] };
+	}
+	const markdownNamespaceDiagnostic = validateTextCardMarkdownNamespaces(regionsResult.regions);
+	if (markdownNamespaceDiagnostic) {
+		return { status: "read-only", source, diagnostics: [markdownNamespaceDiagnostic] };
 	}
 
 	return {

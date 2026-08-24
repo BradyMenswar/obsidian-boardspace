@@ -193,6 +193,71 @@ test("returns exact read-only diagnostics for damaged multi-card region structur
 	}
 });
 
+test("rejects duplicate document-level Markdown identities with exact diagnostics", () => {
+	const cases = [
+		{
+			first: "First paragraph ^shared-block",
+			second: "Second paragraph ^shared-block",
+			diagnostic: {
+				code: "markdown-block-identity-duplicate",
+				message: "Obsidian block identity ^shared-block appears more than once across Boardspace text cards.",
+			},
+		},
+		{
+			first: "First note[^shared]\n\n[^shared]: First definition",
+			second: "Second note[^shared]\n\n[^shared]: Second definition",
+			diagnostic: {
+				code: "markdown-footnote-definition-duplicate",
+				message: "Footnote definition [^shared] appears more than once across Boardspace text cards.",
+			},
+		},
+	];
+
+	for (const duplicate of cases) {
+		const document = makeMultiCardDocument();
+		document.items["text-a"]!.markdown = duplicate.first;
+		document.items["text-b"]!.markdown = duplicate.second;
+		const source = serializeBoardspaceDocument(document);
+		const parsed = parseBoardspaceDocument(source);
+
+		assert.equal(parsed.status, "read-only");
+		if (parsed.status !== "read-only") continue;
+		assert.equal(parsed.source, source);
+		assert.deepEqual(parsed.diagnostics, [duplicate.diagnostic]);
+	}
+});
+
+test("does not treat identifiers shown in text-card code blocks as Markdown definitions", () => {
+	const document = makeMultiCardDocument();
+	document.items["text-a"]!.markdown = "```markdown\nParagraph ^example\n[^example]: Footnote\n```";
+	document.items["text-b"]!.markdown = "Paragraph ^example\n\n[^example]: Footnote";
+	const source = serializeBoardspaceDocument(document);
+
+	const parsed = parseBoardspaceDocument(source);
+
+	assert.equal(parsed.status, "editable");
+	if (parsed.status !== "editable") return;
+	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
+test("keeps Markdown references and definitions scoped to their text card without rewriting", () => {
+	const document = makeMultiCardDocument();
+	const localMarkdown = "Read [the local note][details] and note[^1].\n\n[details]: https://example.com/local\n[^1]: Local footnote";
+	const crossCardReference = "This [reference][remote] and footnote[^remote] have no local definitions.";
+	const otherCardDefinitions = "[remote]: https://example.com/remote\n[^remote]: Another card's footnote";
+	document.items["text-a"]!.markdown = `${localMarkdown}\n\n${crossCardReference}`;
+	document.items["text-b"]!.markdown = otherCardDefinitions;
+	const source = serializeBoardspaceDocument(document);
+
+	const parsed = parseBoardspaceDocument(source);
+
+	assert.equal(parsed.status, "editable");
+	if (parsed.status !== "editable") return;
+	assert.equal(parsed.document.items["text-a"]?.markdown, `${localMarkdown}\n\n${crossCardReference}`);
+	assert.equal(parsed.document.items["text-b"]?.markdown, otherCardDefinitions);
+	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
 test("preserves unrelated frontmatter properties and values", () => {
 	const source = EMPTY_DOCUMENT.replace(
 		"board-version: 2\n",
