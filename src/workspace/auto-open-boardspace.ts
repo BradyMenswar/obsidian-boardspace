@@ -2,11 +2,20 @@ import { Plugin, TFile, ViewState, WorkspaceLeaf } from "obsidian";
 import { activateBoardView, activateMarkdownView, MARKDOWN_VIEW_TYPE } from "commands/util";
 import { hasBoardspaceFrontmatter, isBoardspaceFile } from "files/boardspace-frontmatter";
 import { BOARDSPACE_VIEW_TYPE } from "types/board";
+import { BoardspaceViewCoordinator } from "./boardspace-view-coordinator";
 
 const forcedMarkdownPaths = new Set<string>();
 
 export function registerBoardspaceAutoOpen(plugin: Plugin) {
-	patchLeafViewState(plugin);
+	const coordinator = new BoardspaceViewCoordinator<WorkspaceLeaf>({
+		getOpenBoardspaceLeaves: () =>
+			plugin.app.workspace.getLeavesOfType(BOARDSPACE_VIEW_TYPE),
+		getBoardspacePath: getLeafBoardspacePath,
+		revealLeaf: (leaf) => plugin.app.workspace.revealLeaf(leaf),
+		closeLeaf: async (leaf) => leaf.detach(),
+	});
+	patchLeafViewState(plugin, coordinator);
+	plugin.register(() => forcedMarkdownPaths.clear());
 	plugin.registerEvent(
 		plugin.app.workspace.on("file-open", (file) => {
 			if (!file) {
@@ -22,23 +31,7 @@ export function registerBoardspaceAutoOpen(plugin: Plugin) {
 	);
 
 	plugin.app.workspace.onLayoutReady(() => {
-		for (const leaf of plugin.app.workspace.getLeavesOfType(MARKDOWN_VIEW_TYPE)) {
-			const file = getLeafFile(plugin, leaf);
-			if (!file) {
-				continue;
-			}
-
-			void maybeOpenBoardspaceFile(plugin, file, leaf);
-		}
-
-		for (const leaf of plugin.app.workspace.getLeavesOfType(BOARDSPACE_VIEW_TYPE)) {
-			const file = getLeafFile(plugin, leaf);
-			if (!file) {
-				continue;
-			}
-
-			void maybeOpenMarkdownFile(plugin, file, leaf);
-		}
+		void syncRestoredViews(plugin, coordinator);
 	});
 }
 
@@ -57,7 +50,10 @@ export async function openBoardspaceFileAsMarkdown(
 	}
 }
 
-function patchLeafViewState(plugin: Plugin) {
+function patchLeafViewState(
+	plugin: Plugin,
+	coordinator: BoardspaceViewCoordinator<WorkspaceLeaf>,
+) {
 	const originalSetViewState = WorkspaceLeaf.prototype.setViewState;
 
 	const patchedSetViewState: typeof WorkspaceLeaf.prototype.setViewState =
@@ -66,6 +62,14 @@ function patchLeafViewState(plugin: Plugin) {
 				plugin,
 				viewState,
 			);
+			const path = getBoardspacePath(nextViewState);
+
+			if (path) {
+				await coordinator.open(path, this, () =>
+					originalSetViewState.call(this, nextViewState, eState),
+				);
+				return;
+			}
 
 			return originalSetViewState.call(this, nextViewState, eState);
 		};
@@ -109,6 +113,27 @@ async function resolveBoardspaceViewState(
 		...viewState,
 		type: BOARDSPACE_VIEW_TYPE,
 	};
+}
+
+async function syncRestoredViews(
+	plugin: Plugin,
+	coordinator: BoardspaceViewCoordinator<WorkspaceLeaf>,
+) {
+	await coordinator.reconcile();
+
+	for (const leaf of plugin.app.workspace.getLeavesOfType(MARKDOWN_VIEW_TYPE)) {
+		const file = getLeafFile(plugin, leaf);
+		if (file) {
+			await maybeOpenBoardspaceFile(plugin, file, leaf);
+		}
+	}
+
+	for (const leaf of plugin.app.workspace.getLeavesOfType(BOARDSPACE_VIEW_TYPE)) {
+		const file = getLeafFile(plugin, leaf);
+		if (file) {
+			await maybeOpenMarkdownFile(plugin, file, leaf);
+		}
+	}
 }
 
 async function maybeOpenBoardspaceFile(
@@ -158,6 +183,19 @@ async function syncActiveLeafAfterFileOpen(
 	leaf: WorkspaceLeaf | null,
 ) {
 	await maybeOpenMarkdownFile(plugin, file, leaf);
+}
+
+function getBoardspacePath(viewState: ViewState): string | null {
+	if (viewState.type !== BOARDSPACE_VIEW_TYPE) {
+		return null;
+	}
+
+	const path = viewState.state?.file;
+	return typeof path === "string" ? path : null;
+}
+
+function getLeafBoardspacePath(leaf: WorkspaceLeaf): string | null {
+	return getBoardspacePath(leaf.getViewState());
 }
 
 function getLeafFile(plugin: Plugin, leaf: WorkspaceLeaf): TFile | null {

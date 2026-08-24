@@ -18,8 +18,6 @@ export async function activateBoardView(
 		state: { file: file.path },
 		active: true,
 	}, options.history ? { history: true } : undefined);
-
-	await workspace.revealLeaf(targetLeaf);
 }
 
 export async function activateMarkdownView(
