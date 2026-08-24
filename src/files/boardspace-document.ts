@@ -25,6 +25,7 @@ const TOP_BAR_COLORS = new Set([...COLORS, "transparent"]);
 const DASHES = new Set(["draw", "solid", "dashed", "dotted"]);
 const FILLS = new Set(["none", "semi", "solid", "pattern", "fill", "lined-fill"]);
 const SIZES = new Set(["s", "m", "l", "xl"]);
+const SWATCH_LABELS = new Set(["none", "hex", "rgb", "hsl"]);
 
 export interface BoardspaceTextCardStyle {
 	color: string;
@@ -87,7 +88,23 @@ export interface BoardspaceTableCard extends BoardspaceRootCard {
 	rows: BoardspaceTableRow[];
 }
 
-export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard;
+export type BoardspaceColorSwatchLabel = "none" | "hex" | "rgb" | "hsl";
+
+export interface BoardspaceColorSwatchCard {
+	id: string;
+	kind: "color-swatch";
+	color: string;
+	label: BoardspaceColorSwatchLabel;
+	placement: {
+		type: "root";
+		order: number;
+		position: { x: number; y: number };
+	};
+	preferredSize: { width: number; height: number };
+	style: { opacity: number };
+}
+
+export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard;
 
 export interface BoardspaceDocumentV2 {
 	schemaVersion: typeof BOARDSPACE_SCHEMA_VERSION;
@@ -310,7 +327,7 @@ function validateStructuredData(
 		if (!KNOWN_ITEM_KINDS.has(item.kind)) {
 			return invalid("unknown-item-kind", `Unknown Boardspace canvas item kind: ${item.kind}.`);
 		}
-		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table") {
+		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch") {
 			return invalid("canvas-content-not-supported", `Boardspace canvas item kind ${item.kind} is not supported yet.`);
 		}
 	}
@@ -336,6 +353,13 @@ function validateStructuredData(
 			}
 			const tableDiagnostic = validateTableCard(rawItem, tableNestedIds);
 			if (tableDiagnostic) return { status: "invalid", diagnostic: tableDiagnostic };
+			items[key] = rawItem;
+			continue;
+		}
+		if (isRecord(rawItem) && rawItem.kind === "color-swatch") {
+			if (!isColorSwatchCardData(key, rawItem)) {
+				return invalidData(`Boardspace color swatch ${key} is malformed; use a six-digit hex color, a supported plain-text label setting, and opacity from 0 to 1.`);
+			}
 			items[key] = rawItem;
 			continue;
 		}
@@ -379,7 +403,7 @@ function validateStructuredData(
 	return { status: "valid", items, textCardOrder: [...textCardOrder] };
 }
 
-function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard | BoardspaceTableCard {
+function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard {
 	if (item.kind !== "text") return item;
 	return {
 		id: item.id,
@@ -411,6 +435,13 @@ function isTableCardData(key: string, value: unknown): value is BoardspaceTableC
 	return isRootCardData(value);
 }
 
+function isColorSwatchCardData(key: string, value: unknown): value is BoardspaceColorSwatchCard {
+	if (!isRecord(value) || !hasOnlyKeys(value, ["id", "kind", "color", "label", "placement", "preferredSize", "style"])) return false;
+	if (value.id !== key || value.kind !== "color-swatch" || !isHexColor(value.color) || typeof value.label !== "string" || !SWATCH_LABELS.has(value.label)) return false;
+	if (!isRootPlacementAndPreferredSize(value) || !isRecord(value.style) || !hasOnlyKeys(value.style, ["opacity"])) return false;
+	return isFiniteNumber(value.style.opacity) && value.style.opacity >= 0 && value.style.opacity <= 1;
+}
+
 function validateTableCard(
 	table: BoardspaceTableCard,
 	seenNestedIds: Set<string>,
@@ -440,16 +471,9 @@ function validateTableCard(
 }
 
 function isRootCardData(value: Record<string, unknown>) {
-	if (!isRecord(value.placement) || !isRecord(value.preferredSize) || !isRecord(value.style)) return false;
-	const placement = value.placement;
-	const preferredSize = value.preferredSize;
+	if (!isRootPlacementAndPreferredSize(value) || !isRecord(value.style)) return false;
 	const style = value.style;
-	return hasOnlyKeys(placement, ["type", "order", "position"]) &&
-		placement.type === "root" && isNonNegativeInteger(placement.order) &&
-		isRecord(placement.position) && hasOnlyKeys(placement.position, ["x", "y"]) &&
-		isFiniteNumber(placement.position.x) && isFiniteNumber(placement.position.y) &&
-		hasOnlyKeys(preferredSize, ["width", "height"]) && isPositiveNumber(preferredSize.width) && isPositiveNumber(preferredSize.height) &&
-		hasOnlyKeys(style, ["color", "customColor", "dash", "fill", "opacity", "size", "topBarColor", "topBarCustomColor"]) &&
+	return hasOnlyKeys(style, ["color", "customColor", "dash", "fill", "opacity", "size", "topBarColor", "topBarCustomColor"]) &&
 		typeof style.color === "string" && COLORS.has(style.color) && typeof style.customColor === "string" &&
 		typeof style.dash === "string" && DASHES.has(style.dash) && typeof style.fill === "string" && FILLS.has(style.fill) &&
 		isFiniteNumber(style.opacity) && style.opacity >= 0 && style.opacity <= 1 &&
@@ -457,10 +481,25 @@ function isRootCardData(value: Record<string, unknown>) {
 		typeof style.topBarCustomColor === "string";
 }
 
+function isRootPlacementAndPreferredSize(value: Record<string, unknown>) {
+	if (!isRecord(value.placement) || !isRecord(value.preferredSize)) return false;
+	const placement = value.placement;
+	const preferredSize = value.preferredSize;
+	return hasOnlyKeys(placement, ["type", "order", "position"]) &&
+		placement.type === "root" && isNonNegativeInteger(placement.order) &&
+		isRecord(placement.position) && hasOnlyKeys(placement.position, ["x", "y"]) &&
+		isFiniteNumber(placement.position.x) && isFiniteNumber(placement.position.y) &&
+		hasOnlyKeys(preferredSize, ["width", "height"]) && isPositiveNumber(preferredSize.width) && isPositiveNumber(preferredSize.height);
+}
+
 function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>) {
 	const taskIds = new Set<string>();
 	const tableNestedIds = new Set<string>();
 	for (const item of Object.values(items)) {
+		const itemId = item.id;
+		if (item.kind === "color-swatch" && !isColorSwatchCardData(itemId, item)) {
+			throw new Error(`Color swatch ${itemId} has an invalid color, label, placement, preferred size, or visual style; the complete save was blocked.`);
+		}
 		if (item.kind === "todo") {
 			for (const task of item.tasks) {
 				if (task.id.trim().length === 0) {
@@ -520,6 +559,10 @@ function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: string[]) {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isHexColor(value: unknown): value is string {
+	return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
 }
 
 function isFiniteNumber(value: unknown): value is number {

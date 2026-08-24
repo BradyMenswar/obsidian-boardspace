@@ -5,6 +5,7 @@ import {
 	createSnapshotEditorState,
 } from "../src/files/boardspace-document-adapter";
 import {
+	BoardspaceColorSwatchCard,
 	BoardspaceDocumentV2,
 	BoardspaceTableCard,
 	BoardspaceTextCard,
@@ -110,6 +111,23 @@ const tableDocument: BoardspaceDocumentV2 = {
 };
 const tableSource = serializeBoardspaceDocument(tableDocument);
 
+const swatchCard: BoardspaceColorSwatchCard = {
+	id: "swatch-1",
+	kind: "color-swatch",
+	color: "#3b82f6",
+	label: "hex",
+	placement: { type: "root", order: 1, position: { x: 260, y: 180 } },
+	preferredSize: { width: 280, height: 160 },
+	style: { opacity: 0.7 },
+};
+const swatchDocument: BoardspaceDocumentV2 = {
+	schemaVersion: 2,
+	frontmatterLines: [],
+	textCardOrder: [],
+	items: { "swatch-1": swatchCard },
+};
+const swatchSource = serializeBoardspaceDocument(swatchDocument);
+
 const multiCardDocument: BoardspaceDocumentV2 = {
 	...populatedDocument,
 	textCardOrder: ["text-2", "text-1"],
@@ -175,6 +193,7 @@ test("round-trips one raw-Markdown text card through the complete editor represe
 		],
 		todoCards: [],
 		tableCards: [],
+		swatchCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), populatedSource);
 });
@@ -203,6 +222,7 @@ test("round-trips a to-do card and stable task identities through the complete e
 			},
 		],
 		tableCards: [],
+		swatchCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), todoSource);
 });
@@ -236,8 +256,87 @@ test("round-trips a table card and stable row and column identities through the 
 				],
 			}],
 		}],
+		swatchCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), tableSource);
+});
+
+test("round-trips a color swatch using Boardspace-owned color, label, placement, size, and style values", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(swatchSource);
+
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable") return;
+	assert.deepEqual(loaded.editorState, {
+		kind: "canonical",
+		textCards: [],
+		todoCards: [],
+		tableCards: [],
+		swatchCards: [{
+			id: "swatch-1",
+			color: "#3b82f6",
+			label: "hex",
+			order: 1,
+			position: { x: 260, y: 180 },
+			preferredSize: { width: 280, height: 160 },
+			style: { opacity: 0.7 },
+		}],
+	});
+	const saved = adapter.serializeEditorState(loaded.editorState);
+	assert.equal(saved, swatchSource);
+	assert.match(saved, /"label": "hex"/);
+	assert.doesNotMatch(saved, /colorValue|labelMode|richText|typeName|board-swatch/);
+});
+
+test("persists a color swatch from the complete editor representation with total stacking order", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTextCard(snapshot, "text-behind", "a1", "Behind", 40);
+	addSnapshotSwatchCard(snapshot, "swatch-front", "a2", "#14b8a6", "rgb");
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.deepEqual(reopened.document.items["swatch-front"], {
+		id: "swatch-front",
+		kind: "color-swatch",
+		color: "#14b8a6",
+		label: "rgb",
+		placement: { type: "root", order: 1, position: { x: 300, y: 200 } },
+		preferredSize: { width: 240, height: 140 },
+		style: { opacity: 0.65 },
+	});
+});
+
+test("invalid color swatch color, label, and style values block loading and saving with actionable diagnostics", () => {
+	for (const invalidSource of [
+		swatchSource.replace('"color": "#3b82f6"', '"color": "blue"'),
+		swatchSource.replace('"label": "hex"', '"label": "markdown"'),
+		swatchSource.replace('"opacity": 0.7', '"opacity": 2'),
+	]) {
+		const invalidLoad = createSchemaV2BoardspaceDocumentAdapter().loadSource(invalidSource);
+		assert.equal(invalidLoad.status, "read-only");
+		if (invalidLoad.status !== "read-only") continue;
+		assert.match(invalidLoad.diagnostics[0]?.message ?? "", /color swatch swatch-1.*malformed/i);
+	}
+
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const invalidSnapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotSwatchCard(invalidSnapshot, "swatch-invalid", "a1", "red", "hex");
+	assert.throws(
+		() => adapter.serializeEditorState(createSnapshotEditorState(invalidSnapshot)),
+		/color swatch.*color.*complete save was blocked/i,
+	);
+	addSnapshotSwatchCard(invalidSnapshot, "swatch-invalid", "a1", "#3b82f6", "hex");
+	const rawSwatch = (invalidSnapshot.document.store as Record<string, unknown>)["shape:swatch-invalid"] as Record<string, unknown>;
+	rawSwatch.opacity = 2;
+	assert.throws(
+		() => adapter.serializeEditorState(createSnapshotEditorState(invalidSnapshot)),
+		/color swatch.*visual style.*complete save was blocked/i,
+	);
 });
 
 test("preserves table row and column identities across edits and reorder in an editor snapshot", () => {
@@ -530,6 +629,31 @@ function addSnapshotTextCard(
 			topBarColor: "transparent",
 			topBarCustomColor: "#6b7280",
 			w: 320,
+		},
+	};
+}
+
+function addSnapshotSwatchCard(
+	snapshot: BoardspaceSnapshot,
+	id: string,
+	index: string,
+	colorValue: string,
+	labelMode: "none" | "hex" | "rgb" | "hsl",
+) {
+	(snapshot.document.store as Record<string, unknown>)[`shape:${id}`] = {
+		id: `shape:${id}`,
+		typeName: "shape",
+		type: "board-swatch",
+		parentId: "page:page",
+		index,
+		opacity: 0.65,
+		x: 300,
+		y: 200,
+		props: {
+			colorValue,
+			h: 140,
+			labelMode,
+			w: 240,
 		},
 	};
 }

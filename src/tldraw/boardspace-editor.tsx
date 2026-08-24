@@ -427,9 +427,25 @@ function createCanonicalCards(
 		...state.textCards.map((card) => ({ kind: "text" as const, card })),
 		...state.todoCards.map((card) => ({ kind: "todo" as const, card })),
 		...state.tableCards.map((card) => ({ kind: "table" as const, card })),
+		...state.swatchCards.map((card) => ({ kind: "color-swatch" as const, card })),
 	].sort((a, b) => a.card.order - b.card.order);
 	editor.createShapes(
 		cards.map(({ kind, card }) => {
+			if (kind === "color-swatch") {
+				return {
+					id: `shape:${card.id}` as BoardSwatchShape["id"],
+					type: "board-swatch" as const,
+					opacity: card.style.opacity,
+					x: card.position.x,
+					y: card.position.y,
+					props: {
+						colorValue: card.color,
+						h: card.preferredSize.height,
+						labelMode: card.label,
+						w: card.preferredSize.width,
+					},
+				};
+			}
 			if (kind === "table") {
 				return {
 					id: `shape:${card.id}` as BoardTableShape["id"],

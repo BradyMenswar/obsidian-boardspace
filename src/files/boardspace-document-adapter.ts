@@ -1,6 +1,8 @@
 import type { TLEditorSnapshot } from "tldraw";
 import type { BoardspaceDocumentAdapter } from "./boardspace-document-lifecycle";
 import {
+	BoardspaceColorSwatchCard,
+	BoardspaceColorSwatchLabel,
 	BoardspaceDocumentV2,
 	BoardspaceTableCard,
 	BoardspaceTableColumn,
@@ -43,8 +45,18 @@ export interface BoardspaceEditorTableCard {
 	rows: BoardspaceTableRow[];
 }
 
+export interface BoardspaceEditorColorSwatchCard {
+	id: string;
+	color: string;
+	label: BoardspaceColorSwatchLabel;
+	order: number;
+	position: { x: number; y: number };
+	preferredSize: { width: number; height: number };
+	style: { opacity: number };
+}
+
 export type BoardspaceEditorState =
-	| { kind: "canonical"; textCards: BoardspaceEditorTextCard[]; todoCards: BoardspaceEditorTodoCard[]; tableCards: BoardspaceEditorTableCard[] }
+	| { kind: "canonical"; textCards: BoardspaceEditorTextCard[]; todoCards: BoardspaceEditorTodoCard[]; tableCards: BoardspaceEditorTableCard[]; swatchCards: BoardspaceEditorColorSwatchCard[] }
 	| { kind: "snapshot"; snapshot: TLEditorSnapshot };
 
 export function createSnapshotEditorState(snapshot: TLEditorSnapshot): BoardspaceEditorState {
@@ -86,13 +98,16 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			const tableCards = Object.values(result.document.items)
 				.filter((item): item is BoardspaceTableCard => item.kind === "table")
 				.map(toEditorTableCard);
-			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0;
+			const swatchCards = Object.values(result.document.items)
+				.filter((item): item is BoardspaceColorSwatchCard => item.kind === "color-swatch")
+				.map(toEditorColorSwatchCard);
+			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0 && swatchCards.length === 0;
 			return {
 				status: "editable",
 				sourceStatus: isEmpty ? "empty" : "loaded",
 				editorState: isEmpty
 					? undefined
-					: { kind: "canonical" as const, textCards, todoCards, tableCards },
+					: { kind: "canonical" as const, textCards, todoCards, tableCards, swatchCards },
 			};
 		},
 		serializeEditorState(editorState) {
@@ -107,6 +122,7 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 					...editorState.textCards.map(toCanonicalTextCard),
 					...editorState.todoCards.map(toCanonicalTodoCard),
 					...editorState.tableCards.map(toCanonicalTableCard),
+					...editorState.swatchCards.map(toCanonicalColorSwatchCard),
 				]
 				: readCardsFromSnapshot(editorState.snapshot);
 			cards = renewDuplicatedTableIdentities(cards, document, tableCopyIdentityRemaps);
@@ -131,7 +147,7 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 }
 
 function renewDuplicatedTableIdentities(
-	cards: Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard>,
+	cards: Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard>,
 	loadedDocument: BoardspaceDocumentV2,
 	copyRemaps: Map<string, Map<string, string>>,
 ) {
@@ -215,6 +231,18 @@ function toEditorTableCard(card: BoardspaceTableCard): BoardspaceEditorTableCard
 	};
 }
 
+function toEditorColorSwatchCard(card: BoardspaceColorSwatchCard): BoardspaceEditorColorSwatchCard {
+	return {
+		id: card.id,
+		color: card.color,
+		label: card.label,
+		order: card.placement.order,
+		position: { ...card.placement.position },
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+	};
+}
+
 function toCanonicalTextCard(card: BoardspaceEditorTextCard): BoardspaceTextCard {
 	return {
 		id: card.id,
@@ -266,7 +294,19 @@ function toCanonicalTableCard(card: BoardspaceEditorTableCard): BoardspaceTableC
 	};
 }
 
-function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard> {
+function toCanonicalColorSwatchCard(card: BoardspaceEditorColorSwatchCard): BoardspaceColorSwatchCard {
+	return {
+		id: card.id,
+		kind: "color-swatch",
+		color: card.color,
+		label: card.label,
+		placement: { type: "root", order: card.order, position: { ...card.position } },
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+	};
+}
+
+function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard> {
 	const store = snapshot.document?.store;
 	if (!isRecord(store)) {
 		throw new Error("The editor representation is malformed; the complete save was blocked.");
@@ -287,7 +327,7 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceText
 			pageIds.push(recordId);
 			continue;
 		}
-		if (record.typeName !== "shape" || (record.type !== "board-note" && record.type !== "board-todo" && record.type !== "board-table")) {
+		if (record.typeName !== "shape" || (record.type !== "board-note" && record.type !== "board-todo" && record.type !== "board-table" && record.type !== "board-swatch")) {
 			throw unsupportedRecord(recordId, typeof record.type === "string" ? record.type : String(record.typeName));
 		}
 		shapes.push(record);
@@ -300,6 +340,7 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceText
 	return shapes.map((shape, order) => {
 		if (shape.type === "board-todo") return readTodoCardShape(shape, order, pageIds[0]!);
 		if (shape.type === "board-table") return readTableCardShape(shape, order, pageIds[0]!);
+		if (shape.type === "board-swatch") return readColorSwatchShape(shape, order, pageIds[0]!);
 		return readTextCardShape(shape, order, pageIds[0]!);
 	});
 }
@@ -399,6 +440,36 @@ function readTableCardShape(
 	};
 }
 
+function readColorSwatchShape(
+	shape: Record<string, unknown>,
+	order: number,
+	pageId: string,
+): BoardspaceColorSwatchCard {
+	const props = shape.props;
+	if (
+		typeof shape.id !== "string" || !shape.id.startsWith("shape:") ||
+		shape.parentId !== pageId ||
+		!isFiniteNumber(shape.x) || !isFiniteNumber(shape.y) || !isRecord(props) ||
+		!hasOnlyKeys(props, ["colorValue", "h", "labelMode", "w"]) ||
+		!isHexColor(props.colorValue) || !isColorSwatchLabel(props.labelMode) ||
+		!isPositiveNumber(props.w) || !isPositiveNumber(props.h) ||
+		!isFiniteNumber(shape.opacity) || shape.opacity < 0 || shape.opacity > 1 ||
+		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true ||
+		(isRecord(shape.meta) && Object.keys(shape.meta).length > 0)
+	) {
+		throw new Error("A color swatch editor record has an invalid color, label, placement, preferred size, or visual style; the complete save was blocked.");
+	}
+	return {
+		id: shape.id.slice("shape:".length),
+		kind: "color-swatch",
+		color: props.colorValue,
+		label: props.labelMode,
+		placement: { type: "root", order, position: { x: shape.x, y: shape.y } },
+		preferredSize: { width: props.w, height: props.h },
+		style: { opacity: shape.opacity },
+	};
+}
+
 function isTodoTask(value: unknown): value is BoardspaceTodoTask {
 	return isRecord(value) && hasOnlyKeys(value, ["id", "text", "checked"]) &&
 		typeof value.id === "string" && typeof value.text === "string" && typeof value.checked === "boolean";
@@ -447,6 +518,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: string[]) {
 	const keys = Object.keys(value);
 	return keys.length === allowedKeys.length && keys.every((key) => allowedKeys.includes(key));
+}
+
+function isHexColor(value: unknown): value is string {
+	return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function isColorSwatchLabel(value: unknown): value is BoardspaceColorSwatchLabel {
+	return value === "none" || value === "hex" || value === "rgb" || value === "hsl";
 }
 
 function isFiniteNumber(value: unknown): value is number {
