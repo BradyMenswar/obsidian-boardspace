@@ -16,6 +16,8 @@ import {
 	getBoardLinkCountsFromSnapshot,
 } from "../src/tldraw/board-link-counts";
 
+const LEGACY_BOARDSPACE_FILE_VERSION = 1;
+
 const snapshot = {
 	document: {
 		store: {},
@@ -37,7 +39,7 @@ test("serializes and parses a boardspace snapshot", () => {
 	const fileContents = serializeBoardspaceFile(snapshot);
 	const result = parseBoardspaceFileWithMetadata(fileContents);
 
-	assert.equal(result.version, BOARDSPACE_FILE_VERSION);
+	assert.equal(result.version, LEGACY_BOARDSPACE_FILE_VERSION);
 	assert.deepEqual(result.snapshot, snapshot);
 	assert.deepEqual(parseBoardspaceFile(fileContents), snapshot);
 });
@@ -100,7 +102,7 @@ test("serializes board links as Obsidian backlinks", () => {
 test("returns no snapshot for empty boardspace files", () => {
 	const result = parseBoardspaceFileWithMetadata(serializeBoardspaceFile(undefined));
 
-	assert.equal(result.version, BOARDSPACE_FILE_VERSION);
+	assert.equal(result.version, LEGACY_BOARDSPACE_FILE_VERSION);
 	assert.equal(result.snapshot, undefined);
 });
 
@@ -121,12 +123,12 @@ board-version: ${BOARDSPACE_FILE_VERSION}
 });
 
 test("rejects unsupported boardspace versions", () => {
-	assert.equal(isSupportedBoardspaceVersion(BOARDSPACE_FILE_VERSION), true);
-	assert.equal(isSupportedBoardspaceVersion(BOARDSPACE_FILE_VERSION + 1), false);
+	assert.equal(isSupportedBoardspaceVersion(LEGACY_BOARDSPACE_FILE_VERSION), true);
+	assert.equal(isSupportedBoardspaceVersion(BOARDSPACE_FILE_VERSION), false);
 	assert.equal(isSupportedBoardspaceVersion(undefined), false);
 });
 
-test("detects only current-version boardspace frontmatter", () => {
+test("detects supported and unsupported Boardspace frontmatter versions", () => {
 	assert.equal(
 		hasBoardspaceFrontmatter({
 			frontmatter: {
@@ -143,7 +145,11 @@ test("detects only current-version boardspace frontmatter", () => {
 				"board-version": BOARDSPACE_FILE_VERSION + 1,
 			},
 		}),
-		false,
+		true,
+	);
+	assert.equal(
+		hasBoardspaceFrontmatter({ frontmatter: { type: "boardspace" } }),
+		true,
 	);
 	assert.equal(
 		hasBoardspaceFrontmatter({

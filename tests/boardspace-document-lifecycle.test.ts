@@ -100,6 +100,12 @@ test("reports explicit outcomes for loaded, empty, invalid, and unsupported sour
 		status: "read-only",
 		sourceStatus: "unsupported",
 		editorState: undefined,
+		diagnostics: [
+			{
+				code: "unsupported-legacy-source",
+				message: "This file is not a supported legacy Boardspace document.",
+			},
+		],
 	});
 });
 

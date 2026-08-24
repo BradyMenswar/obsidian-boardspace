@@ -1,5 +1,8 @@
 import { App, Notice, normalizePath } from "obsidian";
-import { serializeBoardspaceFile } from "files/boardspace-file";
+import {
+	createEmptyBoardspaceDocument,
+	serializeBoardspaceDocument,
+} from "files/boardspace-document";
 import { isBoardspaceFile } from "files/boardspace-frontmatter";
 import { activateBoardView } from "./util";
 import { getUniqueBoardspacePath } from "./create-new-boardspace";
@@ -29,7 +32,7 @@ async function openOrCreateBoardspaceForFile(
 	const boardspacePath = getUniqueBoardspacePath(app, "", basePath);
 	const boardspaceFile = await app.vault.create(
 		boardspacePath,
-		serializeBoardspaceFile(undefined),
+		serializeBoardspaceDocument(createEmptyBoardspaceDocument()),
 	);
 
 	new Notice(`Created ${boardspaceFile.basename}; the original note was left unchanged.`);

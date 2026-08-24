@@ -1,8 +1,6 @@
 import { App, CachedMetadata, TFile } from "obsidian";
-import { BOARDSPACE_FILE_VERSION } from "types/board";
 
 const BOARDSPACE_TYPE = "boardspace";
-const BOARDSPACE_VERSION_KEY = "board-version";
 const FRONTMATTER_PATTERN =
 	/^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/;
 
@@ -14,10 +12,7 @@ export function hasBoardspaceFrontmatter(
 		return false;
 	}
 
-	return (
-		frontmatter.type === BOARDSPACE_TYPE &&
-		String(frontmatter[BOARDSPACE_VERSION_KEY]) === String(BOARDSPACE_FILE_VERSION)
-	);
+	return frontmatter.type === BOARDSPACE_TYPE;
 }
 
 export async function isBoardspaceFile(app: App, file: TFile): Promise<boolean> {
@@ -36,9 +31,5 @@ export async function isBoardspaceFile(app: App, file: TFile): Promise<boolean> 
 		return false;
 	}
 
-	return (
-		/^type:\s*boardspace\s*$/m.test(frontmatter) &&
-		new RegExp(`^board-version\\s*:\\s*${BOARDSPACE_FILE_VERSION}\\s*$`, "m")
-			.test(frontmatter)
-	);
+	return /^type:\s*boardspace\s*$/m.test(frontmatter);
 }

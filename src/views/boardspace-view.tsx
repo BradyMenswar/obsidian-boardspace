@@ -1,5 +1,5 @@
 import { AppContext } from "context/app-context";
-import { createLegacyBoardspaceDocumentAdapter } from "files/boardspace-file";
+import { createSchemaV2BoardspaceDocumentAdapter } from "files/boardspace-document-adapter";
 import { BoardspaceDocumentLifecycle } from "files/boardspace-document-lifecycle";
 import { TLEditorSnapshot } from "tldraw";
 import { Menu, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
@@ -22,7 +22,7 @@ export class BoardView extends TextFileView {
 		super(leaf);
 		this.plugin = plugin;
 		this.documentLifecycle = new BoardspaceDocumentLifecycle({
-			documentAdapter: createLegacyBoardspaceDocumentAdapter(),
+			documentAdapter: createSchemaV2BoardspaceDocumentAdapter(),
 			requestSave: async () => this.save(false),
 			scheduler: {
 				schedule: (callback, delay) => window.setTimeout(callback, delay),
@@ -50,10 +50,6 @@ export class BoardView extends TextFileView {
 	setViewData(data: string, clear: boolean) {
 		const outcome = this.documentLifecycle.loadSource(data);
 		this.renderVersion += 1;
-
-		if (outcome.status === "read-only" && data.trim().length > 0) {
-			this.showUnsafeSaveNotice();
-		}
 
 		this.renderView();
 	}
@@ -134,13 +130,29 @@ export class BoardView extends TextFileView {
 		const loadOutcome = this.documentLifecycle.getLoadOutcome();
 		this.root.render(
 			<AppContext.Provider value={this.app}>
-				<BoardspaceEditor
-					file={this.file}
-					isActive={this.isLeafActive}
-					loadKey={`${this.file?.path ?? "boardspace"}:${this.renderVersion}`}
-					onSnapshotChange={this.handleSnapshotChange}
-					snapshot={loadOutcome?.editorState}
-				/>
+				{loadOutcome?.status === "read-only" ? (
+					<div style={{ maxWidth: "640px", padding: "24px" }}>
+						<h2>Boardspace could not open this file</h2>
+						<ul>
+							{loadOutcome.diagnostics.map((diagnostic) => (
+								<li key={`${diagnostic.code}:${diagnostic.message}`}>
+									{diagnostic.message}
+								</li>
+							))}
+						</ul>
+						<button type="button" onClick={() => void this.openAsMarkdown()}>
+							Open as markdown
+						</button>
+					</div>
+				) : (
+					<BoardspaceEditor
+						file={this.file}
+						isActive={this.isLeafActive}
+						loadKey={`${this.file?.path ?? "boardspace"}:${this.renderVersion}`}
+						onSnapshotChange={this.handleSnapshotChange}
+						snapshot={loadOutcome?.editorState}
+					/>
+				)}
 			</AppContext.Provider>,
 		);
 	}
@@ -152,12 +164,20 @@ export class BoardView extends TextFileView {
 		}
 	};
 
+	private async openAsMarkdown() {
+		if (!this.file) {
+			return;
+		}
+
+		await openBoardspaceFileAsMarkdown(this.plugin, this.file, this.leaf);
+	}
+
 	private showUnsafeSaveNotice() {
 		if (this.hasShownUnsafeSaveNotice) {
 			return;
 		}
 
 		this.hasShownUnsafeSaveNotice = true;
-		new Notice("Boardspace did not save because this file is not a supported Boardspace note.");
+		new Notice("Boardspace did not save because this document is read-only.");
 	}
 }

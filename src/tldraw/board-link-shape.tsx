@@ -30,7 +30,11 @@ import {
 import { getUniqueBoardspacePath } from "commands/create-new-boardspace";
 import { activateBoardView } from "commands/util";
 import { useBoardspaceFilePath } from "context/boardspace-file-context";
-import { parseBoardspaceFile, serializeBoardspaceFile } from "files/boardspace-file";
+import { parseBoardspaceFile } from "files/boardspace-file";
+import {
+	createEmptyBoardspaceDocument,
+	serializeBoardspaceDocument,
+} from "files/boardspace-document";
 import { isBoardspaceFile } from "files/boardspace-frontmatter";
 import { useApp } from "hooks/use-app";
 import {
@@ -917,7 +921,7 @@ class BoardspaceFileSuggestModal extends SuggestModal<BoardspaceFileSuggestion> 
 			const filePath = getUniqueBoardspacePath(this.app, folderPath);
 			const file = await this.app.vault.create(
 				filePath,
-				serializeBoardspaceFile(undefined),
+				serializeBoardspaceDocument(createEmptyBoardspaceDocument()),
 			);
 			this.finish(file);
 		} catch (error) {

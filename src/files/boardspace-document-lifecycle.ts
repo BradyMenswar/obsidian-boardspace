@@ -1,5 +1,10 @@
 export type BoardspaceEditableSourceStatus = "loaded" | "empty" | "invalid";
 
+export interface BoardspaceLoadDiagnostic {
+	code: string;
+	message: string;
+}
+
 export type BoardspaceDocumentLoadOutcome<EditorState> =
 	| {
 			status: "editable";
@@ -8,8 +13,9 @@ export type BoardspaceDocumentLoadOutcome<EditorState> =
 	  }
 	| {
 			status: "read-only";
-			sourceStatus: "unsupported";
+			sourceStatus: "unsupported" | "invalid";
 			editorState: undefined;
+			diagnostics: BoardspaceLoadDiagnostic[];
 	  };
 
 export type BoardspaceDocumentUpdateOutcome =

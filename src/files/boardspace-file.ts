@@ -2,13 +2,14 @@ import { TLEditorSnapshot } from "tldraw";
 import type { BoardspaceDocumentAdapter } from "./boardspace-document-lifecycle";
 import {
 	BOARDSPACE_FILE_LANGUAGE,
-	BOARDSPACE_FILE_VERSION,
 	BoardspaceSnapshot,
 } from "types/board";
 
+const LEGACY_BOARDSPACE_FILE_VERSION = 1;
+
 const BOARDSPACE_FRONTMATTER = `---
 type: boardspace
-board-version: ${BOARDSPACE_FILE_VERSION}
+board-version: ${LEGACY_BOARDSPACE_FILE_VERSION}
 ---`;
 
 const BOARDSPACE_BLOCK_PATTERN = new RegExp(
@@ -90,7 +91,7 @@ ${backlinkSection}
 }
 
 export function isSupportedBoardspaceVersion(version: number | undefined) {
-	return version === BOARDSPACE_FILE_VERSION;
+	return version === LEGACY_BOARDSPACE_FILE_VERSION;
 }
 
 export function createLegacyBoardspaceDocumentAdapter(
@@ -103,6 +104,12 @@ export function createLegacyBoardspaceDocumentAdapter(
 					status: "read-only",
 					sourceStatus: "unsupported",
 					editorState: undefined,
+					diagnostics: [
+						{
+							code: "unsupported-legacy-source",
+							message: "This file is not a supported legacy Boardspace document.",
+						},
+					],
 				};
 			}
 
