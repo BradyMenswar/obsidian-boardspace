@@ -2,6 +2,9 @@ import type { TLEditorSnapshot } from "tldraw";
 import type { BoardspaceDocumentAdapter } from "./boardspace-document-lifecycle";
 import {
 	BoardspaceDocumentV2,
+	BoardspaceTableCard,
+	BoardspaceTableColumn,
+	BoardspaceTableRow,
 	BoardspaceTextCard,
 	BoardspaceTextCardStyle,
 	BoardspaceTodoCard,
@@ -29,8 +32,19 @@ export interface BoardspaceEditorTodoCard {
 	tasks: BoardspaceTodoTask[];
 }
 
+export interface BoardspaceEditorTableCard {
+	id: string;
+	order: number;
+	position: { x: number; y: number };
+	preferredSize: { width: number; height: number };
+	style: BoardspaceTextCardStyle;
+	title: string;
+	columns: BoardspaceTableColumn[];
+	rows: BoardspaceTableRow[];
+}
+
 export type BoardspaceEditorState =
-	| { kind: "canonical"; textCards: BoardspaceEditorTextCard[]; todoCards: BoardspaceEditorTodoCard[] }
+	| { kind: "canonical"; textCards: BoardspaceEditorTextCard[]; todoCards: BoardspaceEditorTodoCard[]; tableCards: BoardspaceEditorTableCard[] }
 	| { kind: "snapshot"; snapshot: TLEditorSnapshot };
 
 export function createSnapshotEditorState(snapshot: TLEditorSnapshot): BoardspaceEditorState {
@@ -40,9 +54,11 @@ export function createSnapshotEditorState(snapshot: TLEditorSnapshot): Boardspac
 export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAdapter<BoardspaceEditorState> {
 	let document: BoardspaceDocumentV2 | undefined;
 	let untouchedReadOnlySource = "";
+	const tableCopyIdentityRemaps = new Map<string, Map<string, string>>();
 
 	return {
 		loadSource(source) {
+			tableCopyIdentityRemaps.clear();
 			const result = parseBoardspaceDocument(source);
 			if (result.status === "read-only") {
 				document = undefined;
@@ -67,13 +83,16 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			const todoCards = Object.values(result.document.items)
 				.filter((item): item is BoardspaceTodoCard => item.kind === "todo")
 				.map(toEditorTodoCard);
-			const isEmpty = textCards.length === 0 && todoCards.length === 0;
+			const tableCards = Object.values(result.document.items)
+				.filter((item): item is BoardspaceTableCard => item.kind === "table")
+				.map(toEditorTableCard);
+			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0;
 			return {
 				status: "editable",
 				sourceStatus: isEmpty ? "empty" : "loaded",
 				editorState: isEmpty
 					? undefined
-					: { kind: "canonical" as const, textCards, todoCards },
+					: { kind: "canonical" as const, textCards, todoCards, tableCards },
 			};
 		},
 		serializeEditorState(editorState) {
@@ -83,12 +102,14 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			if (!editorState) {
 				return serializeBoardspaceDocument({ ...document, items: {}, textCardOrder: [] });
 			}
-			const cards = editorState.kind === "canonical"
+			let cards = editorState.kind === "canonical"
 				? [
 					...editorState.textCards.map(toCanonicalTextCard),
 					...editorState.todoCards.map(toCanonicalTodoCard),
+					...editorState.tableCards.map(toCanonicalTableCard),
 				]
 				: readCardsFromSnapshot(editorState.snapshot);
+			cards = renewDuplicatedTableIdentities(cards, document, tableCopyIdentityRemaps);
 			const items = Object.fromEntries(cards.map((card) => [card.id, card]));
 			if (Object.keys(items).length !== cards.length) {
 				throw new Error("Canvas-item identities must be unique; the complete save was blocked.");
@@ -107,6 +128,52 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			return serializeBoardspaceDocument(document);
 		},
 	};
+}
+
+function renewDuplicatedTableIdentities(
+	cards: Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard>,
+	loadedDocument: BoardspaceDocumentV2,
+	copyRemaps: Map<string, Map<string, string>>,
+) {
+	const loadedTables = Object.values(loadedDocument.items)
+		.filter((item): item is BoardspaceTableCard => item.kind === "table");
+
+	return cards.map((card) => {
+		if (card.kind !== "table") return card;
+		const loadedCard = loadedDocument.items[card.id];
+		const matchesNestedIdentities = (table: BoardspaceTableCard) =>
+			table.columns.length === card.columns.length &&
+			table.rows.length === card.rows.length &&
+			table.columns.every((column, index) => column.id === card.columns[index]?.id) &&
+			table.rows.every((row, index) => row.id === card.rows[index]?.id);
+		if (loadedCard?.kind === "table" && matchesNestedIdentities(loadedCard)) return card;
+
+		let remap = copyRemaps.get(card.id);
+		const copiedFrom = loadedTables.find(matchesNestedIdentities);
+		if (!remap && !copiedFrom) return card;
+		if (!remap) {
+			remap = new Map<string, string>();
+			for (const column of card.columns) remap.set(column.id, createNestedIdentity("table-column"));
+			for (const row of card.rows) remap.set(row.id, createNestedIdentity("table-row"));
+			copyRemaps.set(card.id, remap);
+		}
+		return {
+			...card,
+			columns: card.columns.map((column) => ({ ...column, id: remap.get(column.id)! })),
+			rows: card.rows.map((row) => ({
+				...row,
+				id: remap.get(row.id)!,
+				cells: row.cells.map((cell) => ({
+					...cell,
+					columnId: remap.get(cell.columnId) ?? cell.columnId,
+				})),
+			})),
+		};
+	});
+}
+
+function createNestedIdentity(prefix: string) {
+	return `${prefix}:${crypto.randomUUID()}`;
 }
 
 function toEditorTextCard(card: BoardspaceTextCard): BoardspaceEditorTextCard {
@@ -129,6 +196,22 @@ function toEditorTodoCard(card: BoardspaceTodoCard): BoardspaceEditorTodoCard {
 		style: { ...card.style },
 		title: card.title,
 		tasks: card.tasks.map((task) => ({ ...task })),
+	};
+}
+
+function toEditorTableCard(card: BoardspaceTableCard): BoardspaceEditorTableCard {
+	return {
+		id: card.id,
+		order: card.placement.order,
+		position: { ...card.placement.position },
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+		title: card.title,
+		columns: card.columns.map((column) => ({ ...column })),
+		rows: card.rows.map((row) => ({
+			...row,
+			cells: row.cells.map((cell) => ({ ...cell })),
+		})),
 	};
 }
 
@@ -163,7 +246,27 @@ function toCanonicalTodoCard(card: BoardspaceEditorTodoCard): BoardspaceTodoCard
 	};
 }
 
-function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceTextCard | BoardspaceTodoCard> {
+function toCanonicalTableCard(card: BoardspaceEditorTableCard): BoardspaceTableCard {
+	return {
+		id: card.id,
+		kind: "table",
+		title: card.title,
+		columns: card.columns.map((column) => ({ ...column })),
+		rows: card.rows.map((row) => ({
+			...row,
+			cells: row.cells.map((cell) => ({ ...cell })),
+		})),
+		placement: {
+			type: "root",
+			order: card.order,
+			position: { ...card.position },
+		},
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+	};
+}
+
+function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard> {
 	const store = snapshot.document?.store;
 	if (!isRecord(store)) {
 		throw new Error("The editor representation is malformed; the complete save was blocked.");
@@ -184,7 +287,7 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceText
 			pageIds.push(recordId);
 			continue;
 		}
-		if (record.typeName !== "shape" || (record.type !== "board-note" && record.type !== "board-todo")) {
+		if (record.typeName !== "shape" || (record.type !== "board-note" && record.type !== "board-todo" && record.type !== "board-table")) {
 			throw unsupportedRecord(recordId, typeof record.type === "string" ? record.type : String(record.typeName));
 		}
 		shapes.push(record);
@@ -194,11 +297,11 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceText
 		throw new Error("A Boardspace editor representation must contain one document and one editor page; the complete save was blocked.");
 	}
 	shapes.sort((a, b) => String(a.index).localeCompare(String(b.index)));
-	return shapes.map((shape, order) =>
-		shape.type === "board-todo"
-			? readTodoCardShape(shape, order, pageIds[0]!)
-			: readTextCardShape(shape, order, pageIds[0]!),
-	);
+	return shapes.map((shape, order) => {
+		if (shape.type === "board-todo") return readTodoCardShape(shape, order, pageIds[0]!);
+		if (shape.type === "board-table") return readTableCardShape(shape, order, pageIds[0]!);
+		return readTextCardShape(shape, order, pageIds[0]!);
+	});
 }
 
 function readTextCardShape(
@@ -264,9 +367,53 @@ function readTodoCardShape(
 	};
 }
 
+function readTableCardShape(
+	shape: Record<string, unknown>,
+	order: number,
+	pageId: string,
+): BoardspaceTableCard {
+	const props = shape.props;
+	if (
+		typeof shape.id !== "string" || !shape.id.startsWith("shape:") ||
+		shape.parentId !== pageId ||
+		!isFiniteNumber(shape.x) || !isFiniteNumber(shape.y) || !isRecord(props) ||
+		!hasOnlyKeys(props, ["color", "columns", "customColor", "dash", "fill", "h", "rows", "size", "title", "topBarColor", "topBarCustomColor", "w"]) ||
+		!isPositiveNumber(props.w) || !isPositiveNumber(props.h) || typeof props.title !== "string" ||
+		!Array.isArray(props.columns) || !props.columns.every(isTableColumn) ||
+		!Array.isArray(props.rows) || !props.rows.every(isTableRow) ||
+		!isFiniteNumber(shape.opacity) || shape.opacity < 0 || shape.opacity > 1 ||
+		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true ||
+		(isRecord(shape.meta) && Object.keys(shape.meta).length > 0)
+	) {
+		throw new Error("A table-card editor record is malformed; the complete save was blocked.");
+	}
+	return {
+		id: shape.id.slice("shape:".length),
+		kind: "table",
+		title: props.title,
+		columns: props.columns.map((column) => ({ ...column })),
+		rows: props.rows.map((row) => ({ ...row, cells: row.cells.map((cell) => ({ ...cell })) })),
+		placement: { type: "root", order, position: { x: shape.x, y: shape.y } },
+		preferredSize: { width: props.w, height: props.h },
+		style: readTextCardStyle(props, shape.opacity),
+	};
+}
+
 function isTodoTask(value: unknown): value is BoardspaceTodoTask {
 	return isRecord(value) && hasOnlyKeys(value, ["id", "text", "checked"]) &&
 		typeof value.id === "string" && typeof value.text === "string" && typeof value.checked === "boolean";
+}
+
+function isTableColumn(value: unknown): value is BoardspaceTableColumn {
+	return isRecord(value) && hasOnlyKeys(value, ["id", "title"]) &&
+		typeof value.id === "string" && typeof value.title === "string";
+}
+
+function isTableRow(value: unknown): value is BoardspaceTableRow {
+	return isRecord(value) && hasOnlyKeys(value, ["id", "cells"]) &&
+		typeof value.id === "string" && Array.isArray(value.cells) &&
+		value.cells.every((cell) => isRecord(cell) && hasOnlyKeys(cell, ["columnId", "value"]) &&
+			typeof cell.columnId === "string" && typeof cell.value === "string");
 }
 
 function readTextCardStyle(

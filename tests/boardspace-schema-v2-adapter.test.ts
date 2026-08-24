@@ -6,6 +6,7 @@ import {
 } from "../src/files/boardspace-document-adapter";
 import {
 	BoardspaceDocumentV2,
+	BoardspaceTableCard,
 	BoardspaceTextCard,
 	createEmptyBoardspaceDocument,
 	parseBoardspaceDocument,
@@ -71,6 +72,44 @@ const todoDocument: BoardspaceDocumentV2 = {
 };
 const todoSource = serializeBoardspaceDocument(todoDocument);
 
+const tableCard: BoardspaceTableCard = {
+	id: "table-1",
+	kind: "table",
+	title: "Release matrix",
+	columns: [
+		{ id: "column-owner", title: "Owner" },
+		{ id: "column-status", title: "Status" },
+	],
+	rows: [
+		{
+			id: "row-one",
+			cells: [
+				{ columnId: "column-owner", value: "Ada **plain**" },
+				{ columnId: "column-status", value: "Ready" },
+			],
+		},
+	],
+	placement: { type: "root", order: 0, position: { x: 160, y: 220 } },
+	preferredSize: { width: 540, height: 240 },
+	style: {
+		color: "light-violet",
+		customColor: "#a78bfa",
+		dash: "dotted",
+		fill: "solid",
+		opacity: 0.85,
+		size: "l",
+		topBarColor: "violet",
+		topBarCustomColor: "#8b5cf6",
+	},
+};
+const tableDocument: BoardspaceDocumentV2 = {
+	schemaVersion: 2,
+	frontmatterLines: [],
+	textCardOrder: [],
+	items: { "table-1": tableCard },
+};
+const tableSource = serializeBoardspaceDocument(tableDocument);
+
 const multiCardDocument: BoardspaceDocumentV2 = {
 	...populatedDocument,
 	textCardOrder: ["text-2", "text-1"],
@@ -135,6 +174,7 @@ test("round-trips one raw-Markdown text card through the complete editor represe
 			},
 		],
 		todoCards: [],
+		tableCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), populatedSource);
 });
@@ -162,8 +202,129 @@ test("round-trips a to-do card and stable task identities through the complete e
 				title: "Release checklist",
 			},
 		],
+		tableCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), todoSource);
+});
+
+test("round-trips a table card and stable row and column identities through the complete editor representation", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(tableSource);
+
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable") return;
+	assert.deepEqual(loaded.editorState, {
+		kind: "canonical",
+		textCards: [],
+		todoCards: [],
+		tableCards: [{
+			id: "table-1",
+			order: 0,
+			position: { x: 160, y: 220 },
+			preferredSize: { width: 540, height: 240 },
+			style: tableCard.style,
+			title: "Release matrix",
+			columns: [
+				{ id: "column-owner", title: "Owner" },
+				{ id: "column-status", title: "Status" },
+			],
+			rows: [{
+				id: "row-one",
+				cells: [
+					{ columnId: "column-owner", value: "Ada **plain**" },
+					{ columnId: "column-status", value: "Ready" },
+				],
+			}],
+		}],
+	});
+	assert.equal(adapter.serializeEditorState(loaded.editorState), tableSource);
+});
+
+test("preserves table row and column identities across edits and reorder in an editor snapshot", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(tableSource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTableCard(snapshot, "table-1", [...tableCard.columns].reverse(), [{
+		id: "row-one",
+		cells: [
+			{ columnId: "column-status", value: "Shipped" },
+			{ columnId: "column-owner", value: "Ada" },
+		],
+	}]);
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	const table = reopened.document.items["table-1"];
+	assert.equal(table?.kind, "table");
+	if (table?.kind !== "table") return;
+	assert.deepEqual(table.columns.map((column) => column.id), ["column-status", "column-owner"]);
+	assert.deepEqual(table.rows, [{
+		id: "row-one",
+		cells: [
+			{ columnId: "column-status", value: "Shipped" },
+			{ columnId: "column-owner", value: "Ada" },
+		],
+	}]);
+});
+
+test("duplicating a table card renews the copied card's row and column identities", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(tableSource);
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable" || loaded.editorState?.kind !== "canonical") return;
+	const original = loaded.editorState.tableCards[0];
+	assert.ok(original);
+	const duplicate = structuredClone(original);
+	duplicate.id = "table-copy";
+	duplicate.order = 1;
+	loaded.editorState.tableCards.push(duplicate);
+
+	const firstSaved = adapter.serializeEditorState(loaded.editorState);
+	const firstReopened = parseBoardspaceDocument(firstSaved);
+	assert.equal(firstReopened.status, "editable");
+	if (firstReopened.status !== "editable") return;
+	const copy = firstReopened.document.items["table-copy"];
+	assert.equal(copy?.kind, "table");
+	if (copy?.kind !== "table") return;
+	assert.notDeepEqual(copy.columns.map((column) => column.id), tableCard.columns.map((column) => column.id));
+	assert.notDeepEqual(copy.rows.map((row) => row.id), tableCard.rows.map((row) => row.id));
+	assert.deepEqual(copy.rows[0]?.cells.map((cell) => cell.columnId), copy.columns.map((column) => column.id));
+	assert.equal(adapter.serializeEditorState(loaded.editorState), firstSaved);
+});
+
+test("invalid table references and duplicate nested identities block the complete save", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(tableSource);
+	const invalidReference = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTableCard(invalidReference, "table-1", tableCard.columns, [{
+		id: "row-one",
+		cells: [
+			{ columnId: "missing", value: "Ada" },
+			{ columnId: "column-status", value: "Ready" },
+		],
+	}]);
+	assert.throws(
+		() => adapter.serializeEditorState(createSnapshotEditorState(invalidReference)),
+		/references missing column missing.*complete save was blocked/i,
+	);
+
+	const duplicateIdentity = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTableCard(duplicateIdentity, "table-1", [
+		{ id: "column-owner", title: "Owner" },
+		{ id: "column-owner", title: "Status" },
+	], [{
+		id: "row-one",
+		cells: [
+			{ columnId: "column-owner", value: "Ada" },
+			{ columnId: "column-owner", value: "Ready" },
+		],
+	}]);
+	assert.throws(
+		() => adapter.serializeEditorState(createSnapshotEditorState(duplicateIdentity)),
+		/identity column-owner appears more than once.*complete save was blocked/i,
+	);
 });
 
 test("preserves task identities across edits and reorder in an editor snapshot", () => {
@@ -369,6 +530,38 @@ function addSnapshotTextCard(
 			topBarColor: "transparent",
 			topBarCustomColor: "#6b7280",
 			w: 320,
+		},
+	};
+}
+
+function addSnapshotTableCard(
+	snapshot: BoardspaceSnapshot,
+	id: string,
+	columns: Array<{ id: string; title: string }>,
+	rows: Array<{ id: string; cells: Array<{ columnId: string; value: string }> }>,
+) {
+	(snapshot.document.store as Record<string, unknown>)[`shape:${id}`] = {
+		id: `shape:${id}`,
+		typeName: "shape",
+		type: "board-table",
+		parentId: "page:page",
+		index: "a1",
+		opacity: 0.85,
+		x: 160,
+		y: 220,
+		props: {
+			color: "light-violet",
+			columns,
+			customColor: "#a78bfa",
+			dash: "dotted",
+			fill: "solid",
+			h: 240,
+			rows,
+			size: "l",
+			title: "Release matrix",
+			topBarColor: "violet",
+			topBarCustomColor: "#8b5cf6",
+			w: 540,
 		},
 	};
 }

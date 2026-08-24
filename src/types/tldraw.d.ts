@@ -60,6 +60,29 @@ declare module "@tldraw/tlschema" {
 			labelMode: "none" | "hex" | "rgb" | "hsl";
 			w: number;
 		};
+		"board-table": {
+			color: BoardspaceShapeColor;
+			columns: Array<{
+				id: string;
+				title: string;
+			}>;
+			customColor: string;
+			dash: TLDefaultDashStyle;
+			fill: TLDefaultFillStyle;
+			h: number;
+			rows: Array<{
+				id: string;
+				cells: Array<{
+					columnId: string;
+					value: string;
+				}>;
+			}>;
+			size: TLDefaultSizeStyle;
+			title: string;
+			topBarColor: BoardspaceTopBarColor;
+			topBarCustomColor: string;
+			w: number;
+		};
 		"board-todo": {
 			color: BoardspaceShapeColor;
 			customColor: string;

@@ -1,5 +1,96 @@
 @import "tldraw/tldraw.css";
 
+.boardspace-table-shape,
+.boardspace-table-shape__inner {
+	height: 100%;
+	width: 100%;
+}
+
+.boardspace-table-shape__inner {
+	box-sizing: border-box;
+	overflow: hidden;
+	position: relative;
+}
+
+.boardspace-table-shape__top-bar {
+	height: 6px;
+	left: 0;
+	position: absolute;
+	right: 0;
+	top: 0;
+}
+
+.boardspace-table-shape__title,
+.boardspace-table-shape input {
+	appearance: none;
+	background: transparent;
+	border: 0;
+	border-radius: 0;
+	box-shadow: none;
+	box-sizing: border-box;
+	color: inherit;
+	font: inherit;
+	outline: none;
+	width: 100%;
+}
+
+.boardspace-table-shape__title {
+	font-weight: 600;
+	padding: 18px 14px 10px;
+}
+
+.boardspace-table-shape__scroll {
+	height: calc(100% - 48px);
+	overflow: auto;
+	padding: 0 14px 14px;
+}
+
+.boardspace-table-shape table {
+	border-collapse: collapse;
+	min-width: 100%;
+	table-layout: fixed;
+}
+
+.boardspace-table-shape th,
+.boardspace-table-shape td {
+	border: 1px solid color-mix(in srgb, currentColor 22%, transparent);
+	min-width: 96px;
+	padding: 6px 8px;
+	text-align: left;
+}
+
+.boardspace-table-shape th {
+	background: color-mix(in srgb, currentColor 7%, transparent);
+	font-weight: 600;
+}
+
+.boardspace-table-shape__action-cell {
+	min-width: 30px !important;
+	padding: 3px !important;
+	width: 30px;
+}
+
+.boardspace-table-shape button {
+	appearance: none;
+	background: transparent;
+	border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+	border-radius: 4px;
+	color: inherit;
+	cursor: pointer;
+	font: inherit;
+	min-height: 24px;
+}
+
+.boardspace-table-shape__action-cell button {
+	border: 0;
+	width: 100%;
+}
+
+.boardspace-table-shape__add-row {
+	margin-top: 8px;
+	padding: 3px 8px;
+}
+
 .boardspace-view {
 	height: 100%;
 	min-height: 0;

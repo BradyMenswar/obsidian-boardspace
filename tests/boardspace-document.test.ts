@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
 	BoardspaceDocumentV2,
+	BoardspaceTableCard,
 	BoardspaceTextCard,
 	BoardspaceTodoCard,
 	parseBoardspaceDocument,
@@ -197,6 +198,101 @@ test("round-trips to-do plain text, placement, preferred size, style, and task o
 	if (parsed.status !== "editable") return;
 	assert.deepEqual(parsed.document.items["todo-1"], todo);
 	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
+test("round-trips table plain text, stable row and column order, placement, preferred size, and style", () => {
+	const table: BoardspaceTableCard = {
+		id: "table-1",
+		kind: "table",
+		title: "Release **matrix**",
+		columns: [
+			{ id: "column-a", title: "Owner [[plain text]]" },
+			{ id: "column-b", title: "Status" },
+		],
+		rows: [
+			{
+				id: "row-b",
+				cells: [
+					{ columnId: "column-a", value: "Ada" },
+					{ columnId: "column-b", value: "Ready" },
+				],
+			},
+			{
+				id: "row-a",
+				cells: [
+					{ columnId: "column-a", value: "Grace" },
+					{ columnId: "column-b", value: "Blocked" },
+				],
+			},
+		],
+		placement: { type: "root", order: 3, position: { x: 140, y: -30 } },
+		preferredSize: { width: 520, height: 240 },
+		style: {
+			color: "violet",
+			customColor: "#8b5cf6",
+			dash: "solid",
+			fill: "semi",
+			opacity: 0.9,
+			size: "m",
+			topBarColor: "light-violet",
+			topBarCustomColor: "#a78bfa",
+		},
+	};
+	const source = serializeBoardspaceDocument({
+		schemaVersion: 2,
+		frontmatterLines: [],
+		items: { "table-1": table },
+		textCardOrder: [],
+	});
+	const parsed = parseBoardspaceDocument(source);
+
+	assert.equal(parsed.status, "editable");
+	if (parsed.status !== "editable") return;
+	assert.deepEqual(parsed.document.items["table-1"], table);
+	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
+test("rejects invalid table dimensions, references, and document-scoped nested identities", () => {
+	const table: BoardspaceTableCard = {
+		id: "table-1",
+		kind: "table",
+		title: "Matrix",
+		columns: [{ id: "column-a", title: "Owner" }],
+		rows: [{ id: "row-a", cells: [{ columnId: "column-a", value: "Ada" }] }],
+		placement: { type: "root", order: 0, position: { x: 0, y: 0 } },
+		preferredSize: { width: 320, height: 160 },
+		style: makeTextCard("style", "", 0).style,
+	};
+	const source = serializeBoardspaceDocument({
+		schemaVersion: 2,
+		frontmatterLines: [],
+		items: { "table-1": table },
+		textCardOrder: [],
+	});
+	const cases = [
+		{
+			source: source.replace('"columnId": "column-a"', '"columnId": "missing"'),
+			diagnostic: { code: "table-cell-reference-invalid", message: "Table card table-1 row row-a references missing column missing." },
+		},
+		{
+			source: source.replace(
+				'"columns": [',
+				'"columns": [{ "id": "column-b", "title": "Status" },',
+			),
+			diagnostic: { code: "table-dimensions-invalid", message: "Table card table-1 row row-a must have exactly one cell for every column." },
+		},
+		{
+			source: source.replace('"id": "row-a"', '"id": "column-a"'),
+			diagnostic: { code: "table-nested-identity-duplicate", message: "Table row or column identity column-a appears more than once in this Boardspace document." },
+		},
+	];
+
+	for (const invalid of cases) {
+		const parsed = parseBoardspaceDocument(invalid.source);
+		assert.equal(parsed.status, "read-only");
+		if (parsed.status !== "read-only") continue;
+		assert.deepEqual(parsed.diagnostics, [invalid.diagnostic]);
+	}
 });
 
 test("rejects duplicate and empty task identities with actionable diagnostics", () => {

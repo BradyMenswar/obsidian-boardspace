@@ -65,7 +65,29 @@ export interface BoardspaceTodoCard extends BoardspaceRootCard {
 	tasks: BoardspaceTodoTask[];
 }
 
-export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard;
+export interface BoardspaceTableColumn {
+	id: string;
+	title: string;
+}
+
+export interface BoardspaceTableCell {
+	columnId: string;
+	value: string;
+}
+
+export interface BoardspaceTableRow {
+	id: string;
+	cells: BoardspaceTableCell[];
+}
+
+export interface BoardspaceTableCard extends BoardspaceRootCard {
+	kind: "table";
+	title: string;
+	columns: BoardspaceTableColumn[];
+	rows: BoardspaceTableRow[];
+}
+
+export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard;
 
 export interface BoardspaceDocumentV2 {
 	schemaVersion: typeof BOARDSPACE_SCHEMA_VERSION;
@@ -93,6 +115,10 @@ export interface BoardspaceDocumentDiagnostic {
 		| "text-card-region-orphan"
 		| "task-identity-invalid"
 		| "task-identity-duplicate"
+		| "table-nested-identity-invalid"
+		| "table-nested-identity-duplicate"
+		| "table-cell-reference-invalid"
+		| "table-dimensions-invalid"
 		| "markdown-block-identity-duplicate"
 		| "markdown-footnote-definition-duplicate"
 		| "index-projection-malformed";
@@ -196,7 +222,7 @@ export function parseBoardspaceDocument(
 }
 
 export function serializeBoardspaceDocument(document: BoardspaceDocumentV2): string {
-	assertValidTaskIdentities(document.items);
+	assertValidNestedIdentities(document.items);
 	const unrelatedFrontmatter = document.frontmatterLines.length > 0
 		? `\n${document.frontmatterLines.join("\n")}`
 		: "";
@@ -284,13 +310,14 @@ function validateStructuredData(
 		if (!KNOWN_ITEM_KINDS.has(item.kind)) {
 			return invalid("unknown-item-kind", `Unknown Boardspace canvas item kind: ${item.kind}.`);
 		}
-		if (item.kind !== "text" && item.kind !== "todo") {
+		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table") {
 			return invalid("canvas-content-not-supported", `Boardspace canvas item kind ${item.kind} is not supported yet.`);
 		}
 	}
 
 	const items: Record<string, BoardspaceCanvasItem> = {};
 	const taskIds = new Set<string>();
+	const tableNestedIds = new Set<string>();
 	for (const [key, rawItem] of entries) {
 		if (isRecord(rawItem) && rawItem.kind === "text") {
 			if (!isTextCardData(key, rawItem)) {
@@ -301,6 +328,15 @@ function validateStructuredData(
 				return invalid("text-card-region-missing", `Text card ${key} has no Markdown region.`);
 			}
 			items[key] = { ...rawItem, markdown };
+			continue;
+		}
+		if (isRecord(rawItem) && rawItem.kind === "table") {
+			if (!isTableCardData(key, rawItem)) {
+				return invalidData(`Boardspace table card ${key} is malformed.`);
+			}
+			const tableDiagnostic = validateTableCard(rawItem, tableNestedIds);
+			if (tableDiagnostic) return { status: "invalid", diagnostic: tableDiagnostic };
+			items[key] = rawItem;
 			continue;
 		}
 		if (!isTodoCardData(key, rawItem)) {
@@ -343,8 +379,8 @@ function validateStructuredData(
 	return { status: "valid", items, textCardOrder: [...textCardOrder] };
 }
 
-function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard {
-	if (item.kind === "todo") return item;
+function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard | BoardspaceTableCard {
+	if (item.kind !== "text") return item;
 	return {
 		id: item.id,
 		kind: item.kind,
@@ -367,6 +403,42 @@ function isTodoCardData(key: string, value: unknown): value is BoardspaceTodoCar
 	return isRootCardData(value);
 }
 
+function isTableCardData(key: string, value: unknown): value is BoardspaceTableCard {
+	if (!isRecord(value) || !hasOnlyKeys(value, ["id", "kind", "title", "columns", "rows", "placement", "preferredSize", "style"])) return false;
+	if (value.id !== key || value.kind !== "table" || typeof value.title !== "string" || !Array.isArray(value.columns) || !Array.isArray(value.rows)) return false;
+	if (!value.columns.every((column) => isRecord(column) && hasOnlyKeys(column, ["id", "title"]) && typeof column.id === "string" && typeof column.title === "string")) return false;
+	if (!value.rows.every((row) => isRecord(row) && hasOnlyKeys(row, ["id", "cells"]) && typeof row.id === "string" && Array.isArray(row.cells) && row.cells.every((cell) => isRecord(cell) && hasOnlyKeys(cell, ["columnId", "value"]) && typeof cell.columnId === "string" && typeof cell.value === "string"))) return false;
+	return isRootCardData(value);
+}
+
+function validateTableCard(
+	table: BoardspaceTableCard,
+	seenNestedIds: Set<string>,
+): BoardspaceDocumentDiagnostic | undefined {
+	for (const nested of [...table.columns, ...table.rows]) {
+		if (nested.id.trim().length === 0) {
+			return { code: "table-nested-identity-invalid", message: `Table card ${table.id} has a row or column with an empty identity.` };
+		}
+		if (seenNestedIds.has(nested.id)) {
+			return { code: "table-nested-identity-duplicate", message: `Table row or column identity ${nested.id} appears more than once in this Boardspace document.` };
+		}
+		seenNestedIds.add(nested.id);
+	}
+
+	const columnIds = new Set(table.columns.map((column) => column.id));
+	for (const row of table.rows) {
+		for (const cell of row.cells) {
+			if (!columnIds.has(cell.columnId)) {
+				return { code: "table-cell-reference-invalid", message: `Table card ${table.id} row ${row.id} references missing column ${cell.columnId}.` };
+			}
+		}
+		if (row.cells.length !== table.columns.length || new Set(row.cells.map((cell) => cell.columnId)).size !== table.columns.length) {
+			return { code: "table-dimensions-invalid", message: `Table card ${table.id} row ${row.id} must have exactly one cell for every column.` };
+		}
+	}
+	return undefined;
+}
+
 function isRootCardData(value: Record<string, unknown>) {
 	if (!isRecord(value.placement) || !isRecord(value.preferredSize) || !isRecord(value.style)) return false;
 	const placement = value.placement;
@@ -385,18 +457,24 @@ function isRootCardData(value: Record<string, unknown>) {
 		typeof style.topBarCustomColor === "string";
 }
 
-function assertValidTaskIdentities(items: Record<string, BoardspaceCanvasItem>) {
+function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>) {
 	const taskIds = new Set<string>();
+	const tableNestedIds = new Set<string>();
 	for (const item of Object.values(items)) {
-		if (item.kind !== "todo") continue;
-		for (const task of item.tasks) {
-			if (task.id.trim().length === 0) {
-				throw new Error(`To-do card ${item.id} has a task with an empty identity; the complete save was blocked.`);
+		if (item.kind === "todo") {
+			for (const task of item.tasks) {
+				if (task.id.trim().length === 0) {
+					throw new Error(`To-do card ${item.id} has a task with an empty identity; the complete save was blocked.`);
+				}
+				if (taskIds.has(task.id)) {
+					throw new Error(`Duplicate to-do task identity ${task.id} blocks the complete save.`);
+				}
+				taskIds.add(task.id);
 			}
-			if (taskIds.has(task.id)) {
-				throw new Error(`Duplicate to-do task identity ${task.id} blocks the complete save.`);
-			}
-			taskIds.add(task.id);
+		}
+		if (item.kind === "table") {
+			const diagnostic = validateTableCard(item, tableNestedIds);
+			if (diagnostic) throw new Error(`${diagnostic.message} The complete save was blocked.`);
 		}
 	}
 }

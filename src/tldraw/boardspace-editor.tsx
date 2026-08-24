@@ -102,6 +102,9 @@ import {
 	normalizeBoardSwatchColor,
 } from "./board-swatch-shape";
 import { BoardSwatchTool } from "./board-swatch-tool";
+import { registerBoardTableIdentityNormalization } from "./board-table-identities";
+import { BoardTableShape, BoardTableShapeUtil } from "./board-table-shape";
+import { BoardTableTool } from "./board-table-tool";
 import { registerBoardTodoIdentityNormalization } from "./board-todo-identities";
 import { BoardTodoShape, BoardTodoShapeUtil } from "./board-todo-shape";
 import { BoardTodoTool } from "./board-todo-tool";
@@ -181,6 +184,7 @@ const BOARDSPACE_TOOLS = [
 	EraserTool,
 	BoardNoteTool,
 	BoardTodoTool,
+	BoardTableTool,
 	BoardColumnTool,
 	BoardLinkTool,
 	BoardSwatchTool,
@@ -188,6 +192,7 @@ const BOARDSPACE_TOOLS = [
 const BOARDSPACE_SHAPES = [
 	BoardNoteShapeUtil,
 	BoardTodoShapeUtil,
+	BoardTableShapeUtil,
 	BoardColumnShapeUtil,
 	BoardLinkShapeUtil,
 	BoardSwatchShapeUtil,
@@ -277,6 +282,7 @@ function BoardspaceEditorInner({
 			replaceCanvasDoubleClickWithBoardNote(editor);
 		const cleanupColumnLayout = registerBoardColumnAutoLayout(editor);
 		const cleanupTodoIdentities = registerBoardTodoIdentityNormalization(editor);
+		const cleanupTableIdentities = registerBoardTableIdentityNormalization(editor);
 		const cleanupMediaCaptions =
 			registerBoardspaceMediaCaptionNormalization(editor);
 		const removeSnapshotListener = editor.store.listen(
@@ -295,6 +301,7 @@ function BoardspaceEditorInner({
 			cleanupDoubleClick?.();
 			cleanupColumnLayout?.();
 			cleanupTodoIdentities?.();
+			cleanupTableIdentities?.();
 			cleanupMediaCaptions?.();
 			removeSnapshotListener();
 		};
@@ -369,6 +376,16 @@ function pickBoardspaceTools(
 		},
 	};
 
+	nextTools.table = {
+		id: "table",
+		icon: <TableToolIcon />,
+		kbd: "shift+t",
+		label: "Table",
+		onSelect() {
+			editor.setCurrentTool("table");
+		},
+	};
+
 	nextTools.column = {
 		id: "column",
 		icon: <ColumnToolIcon />,
@@ -409,9 +426,33 @@ function createCanonicalCards(
 	const cards = [
 		...state.textCards.map((card) => ({ kind: "text" as const, card })),
 		...state.todoCards.map((card) => ({ kind: "todo" as const, card })),
+		...state.tableCards.map((card) => ({ kind: "table" as const, card })),
 	].sort((a, b) => a.card.order - b.card.order);
 	editor.createShapes(
 		cards.map(({ kind, card }) => {
+			if (kind === "table") {
+				return {
+					id: `shape:${card.id}` as BoardTableShape["id"],
+					type: "board-table" as const,
+					opacity: card.style.opacity,
+					x: card.position.x,
+					y: card.position.y,
+					props: {
+						color: card.style.color as BoardTableShape["props"]["color"],
+						columns: card.columns.map((column) => ({ ...column })),
+						customColor: card.style.customColor,
+						dash: card.style.dash as BoardTableShape["props"]["dash"],
+						fill: card.style.fill as BoardTableShape["props"]["fill"],
+						h: card.preferredSize.height,
+						rows: card.rows.map((row) => ({ ...row, cells: row.cells.map((cell) => ({ ...cell })) })),
+						size: card.style.size as BoardTableShape["props"]["size"],
+						title: card.title,
+						topBarColor: card.style.topBarColor as BoardTableShape["props"]["topBarColor"],
+						topBarCustomColor: card.style.topBarCustomColor,
+						w: card.preferredSize.width,
+					},
+				};
+			}
 			if (kind === "todo") {
 				return {
 					id: `shape:${card.id}` as BoardTodoShape["id"],
@@ -677,6 +718,15 @@ function ColumnToolIcon() {
 	);
 }
 
+function TableToolIcon() {
+	return (
+		<svg viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="1.2">
+			<rect x="2.2" y="2.8" width="11.6" height="10.4" rx="1" />
+			<path d="M2.2 6.2h11.6M7.8 6.2v7" />
+		</svg>
+	);
+}
+
 function TodoToolIcon() {
 	return (
 		<svg
@@ -787,6 +837,7 @@ function BoardspaceStylePanelContent() {
 						shape.type === "board-link" ||
 						shape.type === "board-column" ||
 						shape.type === "board-swatch" ||
+						shape.type === "board-table" ||
 						shape.type === "board-todo",
 				),
 		[editor],
@@ -991,11 +1042,13 @@ type BoardspaceStylableShape =
 	| BoardLinkShape
 	| BoardColumnShape
 	| BoardSwatchShape
+	| BoardTableShape
 	| BoardTodoShape;
 type BoardspaceColorTargetShape =
 	| BoardNoteShape
 	| BoardLinkShape
 	| BoardColumnShape
+	| BoardTableShape
 	| BoardTodoShape;
 
 function BoardspaceColorSection({
@@ -1636,6 +1689,7 @@ function getSelectedBoardspaceShapes(editor: Editor) {
 				shape.type === "board-note" ||
 				shape.type === "board-link" ||
 				shape.type === "board-column" ||
+				shape.type === "board-table" ||
 				shape.type === "board-todo",
 		);
 }
