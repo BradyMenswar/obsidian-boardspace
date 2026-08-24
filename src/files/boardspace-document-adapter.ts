@@ -70,14 +70,19 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			const textCards = editorState.kind === "canonical"
 				? editorState.textCards.map(toCanonicalTextCard)
 				: readTextCardsFromSnapshot(editorState.snapshot);
-			if (textCards.length > 1) {
-				throw new Error("This Boardspace build supports one text card per document; the complete save was blocked.");
-			}
 			const items = Object.fromEntries(textCards.map((card) => [card.id, card]));
+			if (Object.keys(items).length !== textCards.length) {
+				throw new Error("Text-card identities must be unique; the complete save was blocked.");
+			}
+			const retainedSourceOrder = document.textCardOrder.filter((id) => items[id]);
+			const retainedIds = new Set(retainedSourceOrder);
+			const newSourceOrder = textCards
+				.map((card) => card.id)
+				.filter((id) => !retainedIds.has(id));
 			document = {
 				...document,
 				items,
-				textCardOrder: textCards.map((card) => card.id),
+				textCardOrder: [...retainedSourceOrder, ...newSourceOrder],
 			};
 			return serializeBoardspaceDocument(document);
 		},

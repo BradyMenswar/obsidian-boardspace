@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+	BoardspaceDocumentV2,
+	BoardspaceTextCard,
 	parseBoardspaceDocument,
 	serializeBoardspaceDocument,
 } from "../src/files/boardspace-document";
@@ -27,6 +29,38 @@ function diagnosticCodes(source: string) {
 	return result.status === "read-only"
 		? result.diagnostics.map((diagnostic) => diagnostic.code)
 		: [];
+}
+
+function makeTextCard(id: string, markdown: string, order: number): BoardspaceTextCard {
+	return {
+		id,
+		kind: "text",
+		markdown,
+		placement: { type: "root", order, position: { x: order * 100, y: order * 50 } },
+		preferredSize: { width: 320, height: 96 },
+		style: {
+			color: "blue",
+			customColor: "#6b7280",
+			dash: "solid",
+			fill: "semi",
+			opacity: 1,
+			size: "m",
+			topBarColor: "transparent",
+			topBarCustomColor: "#6b7280",
+		},
+	};
+}
+
+function makeMultiCardDocument(): BoardspaceDocumentV2 {
+	return {
+		schemaVersion: 2,
+		frontmatterLines: [],
+		textCardOrder: ["text-b", "text-a"],
+		items: {
+			"text-a": makeTextCard("text-a", "Alpha  \n\n- untouched", 0),
+			"text-b": makeTextCard("text-b", "## Beta\n\n`raw`", 1),
+		},
+	};
 }
 
 test("round-trips an empty schema-v2 Boardspace document deterministically", () => {
@@ -104,6 +138,59 @@ board-version: 2
 	assert.equal(parsed.document.items["text-1"]?.markdown, "# Project notes\n\n- [ ] Keep **Markdown** intact");
 	assert.deepEqual(parsed.document.textCardOrder, ["text-1"]);
 	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
+test("round-trips multiple text-card regions in stable source order with deterministic structured data", () => {
+	const source = serializeBoardspaceDocument(makeMultiCardDocument());
+
+	assert.ok(source.indexOf("start text-b") < source.indexOf("start text-a"));
+	assert.ok(source.indexOf('"text-a":') < source.indexOf('"text-b":'));
+	const parsed = parseBoardspaceDocument(source);
+	assert.equal(parsed.status, "editable");
+	if (parsed.status !== "editable") return;
+	assert.deepEqual(parsed.document.textCardOrder, ["text-b", "text-a"]);
+	assert.equal(parsed.document.items["text-a"]?.markdown, "Alpha  \n\n- untouched");
+	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
+test("returns exact read-only diagnostics for damaged multi-card region structure without repairing source", () => {
+	const source = serializeBoardspaceDocument(makeMultiCardDocument());
+	const textBRegion = "<!-- boardspace-text-card:start text-b -->\n## Beta\n\n`raw`\n<!-- boardspace-text-card:end text-b -->";
+	const textARegion = "<!-- boardspace-text-card:start text-a -->\nAlpha  \n\n- untouched\n<!-- boardspace-text-card:end text-a -->";
+	const cases = [
+		{
+			source: source.replace(`${textBRegion}\n\n`, ""),
+			diagnostic: { code: "text-card-region-missing", message: "Text card text-b has no Markdown region." },
+		},
+		{
+			source: source.replace(`${textBRegion}\n\n`, `${textBRegion}\n\n${textBRegion}\n\n`),
+			diagnostic: { code: "text-card-region-duplicate", message: "Boardspace text-card region text-b appears more than once." },
+		},
+		{
+			source: source.replace("end text-b", "end text-a"),
+			diagnostic: { code: "text-card-region-malformed", message: "A Boardspace text-card region is malformed." },
+		},
+		{
+			source: source.replace(`${textBRegion}\n\n`, `${textBRegion}\n\n<!-- boardspace-text-card:start orphan -->\nOrphan\n<!-- boardspace-text-card:end orphan -->\n\n`),
+			diagnostic: { code: "text-card-region-orphan", message: "Markdown region orphan has no text-card record." },
+		},
+		{
+			source: source.replace(`${textBRegion}\n\n`, `${textBRegion}\n\nOutside Markdown\n\n`),
+			diagnostic: { code: "body-content-invalid", message: "Markdown outside Boardspace-owned regions is not allowed." },
+		},
+		{
+			source: source.replace(`${textBRegion}\n\n${textARegion}`, `${textARegion}\n\n${textBRegion}`),
+			diagnostic: { code: "structured-data-invalid", message: "Text-card source order does not match the Markdown region order." },
+		},
+	];
+
+	for (const damaged of cases) {
+		const parsed = parseBoardspaceDocument(damaged.source);
+		assert.equal(parsed.status, "read-only");
+		if (parsed.status !== "read-only") continue;
+		assert.equal(parsed.source, damaged.source);
+		assert.deepEqual(parsed.diagnostics, [damaged.diagnostic]);
+	}
 });
 
 test("preserves unrelated frontmatter properties and values", () => {

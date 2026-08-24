@@ -40,6 +40,21 @@ const populatedDocument: BoardspaceDocumentV2 = {
 };
 const populatedSource = serializeBoardspaceDocument(populatedDocument);
 
+const multiCardDocument: BoardspaceDocumentV2 = {
+	...populatedDocument,
+	textCardOrder: ["text-2", "text-1"],
+	items: {
+		...populatedDocument.items,
+		"text-2": {
+			...populatedDocument.items["text-1"]!,
+			id: "text-2",
+			markdown: "Second card\n\n- original",
+			placement: { type: "root", order: 1, position: { x: 140, y: 160 } },
+		},
+	},
+};
+const multiCardSource = serializeBoardspaceDocument(multiCardDocument);
+
 const emptyEditorSnapshot = {
 	document: {
 		store: {
@@ -90,6 +105,51 @@ test("round-trips one raw-Markdown text card through the complete editor represe
 		],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), populatedSource);
+});
+
+test("preserves multi-card source order and untouched Markdown when canvas order and another card change", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(multiCardSource);
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable") return;
+	assert.equal(loaded.editorState?.kind, "canonical");
+	if (loaded.editorState?.kind !== "canonical") return;
+	assert.deepEqual(loaded.editorState.textCards.map((card) => card.id), ["text-2", "text-1"]);
+
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTextCard(snapshot, "text-1", "a1", "# Heading\n\nRaw **Markdown**", 400);
+	addSnapshotTextCard(snapshot, "text-2", "a2", "Second card edited", 200);
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const untouchedRegion = "<!-- boardspace-text-card:start text-1 -->\n# Heading\n\nRaw **Markdown**\n<!-- boardspace-text-card:end text-1 -->";
+	assert.ok(saved.indexOf("start text-2") < saved.indexOf("start text-1"));
+	assert.ok(saved.includes(untouchedRegion));
+	assert.ok(saved.indexOf('"text-1":') < saved.indexOf('"text-2":'));
+
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.deepEqual(reopened.document.textCardOrder, ["text-2", "text-1"]);
+	assert.equal(reopened.document.items["text-1"]?.placement.order, 0);
+	assert.equal(reopened.document.items["text-1"]?.placement.position.x, 400);
+	assert.equal(reopened.document.items["text-2"]?.markdown, "Second card edited");
+	assert.equal(adapter.serializeEditorState(createSnapshotEditorState(snapshot)), saved);
+});
+
+test("appends new cards to source order independently of their canvas stacking order", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(multiCardSource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTextCard(snapshot, "text-3", "a0", "New card", 0);
+	addSnapshotTextCard(snapshot, "text-1", "a1", "# Heading\n\nRaw **Markdown**", 40);
+	addSnapshotTextCard(snapshot, "text-2", "a2", "Second card\n\n- original", 140);
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.deepEqual(reopened.document.textCardOrder, ["text-2", "text-1", "text-3"]);
+	assert.equal(reopened.document.items["text-3"]?.placement.order, 0);
 });
 
 test("creating, editing, closing, and reopening preserves text-card Markdown and identity", () => {
@@ -180,6 +240,38 @@ test("returns exact read-only diagnostics and preserves invalid source", () => {
 	});
 	assert.equal(adapter.serializeEditorState(undefined), source);
 });
+
+function addSnapshotTextCard(
+	snapshot: BoardspaceSnapshot,
+	id: string,
+	index: string,
+	markdown: string,
+	x: number,
+) {
+	(snapshot.document.store as Record<string, unknown>)[`shape:${id}`] = {
+		id: `shape:${id}`,
+		typeName: "shape",
+		type: "board-note",
+		parentId: "page:page",
+		index,
+		opacity: 1,
+		x,
+		y: 48,
+		props: {
+			color: "blue",
+			customColor: "#6b7280",
+			dash: "solid",
+			fill: "semi",
+			h: 96,
+			markdown,
+			minH: 96,
+			size: "m",
+			topBarColor: "transparent",
+			topBarCustomColor: "#6b7280",
+			w: 320,
+		},
+	};
+}
 
 test("recognizes schema v1 as unsupported", () => {
 	const source = emptySource.replace("board-version: 2", "board-version: 1");

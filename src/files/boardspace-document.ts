@@ -68,7 +68,8 @@ export interface BoardspaceDocumentDiagnostic {
 		| "unknown-item-kind"
 		| "canvas-content-not-supported"
 		| "body-content-invalid"
-		| "text-card-region-invalid"
+		| "text-card-region-duplicate"
+		| "text-card-region-malformed"
 		| "text-card-region-missing"
 		| "text-card-region-orphan"
 		| "index-projection-malformed";
@@ -198,7 +199,7 @@ export function serializeBoardspaceDocument(document: BoardspaceDocumentV2): str
 
 function parseTextCardRegions(source: string):
 	| { status: "valid"; regions: Map<string, string> }
-	| { status: "invalid"; code: "body-content-invalid" | "text-card-region-invalid"; message: string } {
+	| { status: "invalid"; code: "body-content-invalid" | "text-card-region-duplicate" | "text-card-region-malformed"; message: string } {
 	const regions = new Map<string, string>();
 	let previousEnd = 0;
 
@@ -208,8 +209,11 @@ function parseTextCardRegions(source: string):
 			return invalidRegionGap(gap);
 		}
 		const id = match[1];
-		if (!id || regions.has(id)) {
-			return { status: "invalid", code: "text-card-region-invalid", message: "A Boardspace text-card region identity is missing or duplicated." };
+		if (!id) {
+			return { status: "invalid", code: "text-card-region-malformed", message: "A Boardspace text-card region identity is missing." };
+		}
+		if (regions.has(id)) {
+			return { status: "invalid", code: "text-card-region-duplicate", message: `Boardspace text-card region ${id} appears more than once.` };
 		}
 		regions.set(id, match[2] ?? "");
 		previousEnd = (match.index ?? 0) + match[0].length;
@@ -224,7 +228,7 @@ function parseTextCardRegions(source: string):
 
 function invalidRegionGap(content: string) {
 	return content.includes("boardspace-text-card:")
-		? { status: "invalid" as const, code: "text-card-region-invalid" as const, message: "A Boardspace text-card region is malformed." }
+		? { status: "invalid" as const, code: "text-card-region-malformed" as const, message: "A Boardspace text-card region is malformed." }
 		: { status: "invalid" as const, code: "body-content-invalid" as const, message: "Markdown outside Boardspace-owned regions is not allowed." };
 }
 
@@ -257,10 +261,6 @@ function validateStructuredData(
 		}
 	}
 
-	if (entries.length > 1) {
-		return invalid("canvas-content-not-supported", "This Boardspace build supports one text card per document.");
-	}
-
 	const items: Record<string, BoardspaceTextCard> = {};
 	for (const [key, rawItem] of entries) {
 		if (!isTextCardData(key, rawItem)) {
@@ -286,6 +286,10 @@ function validateStructuredData(
 		textCardOrder.some((id) => !items[id])
 	) {
 		return invalidData("Text-card source order does not match the text-card records.");
+	}
+	const regionOrder = Array.from(regions.keys());
+	if (textCardOrder.some((id, index) => id !== regionOrder[index])) {
+		return invalidData("Text-card source order does not match the Markdown region order.");
 	}
 
 	return { status: "valid", items, textCardOrder: [...textCardOrder] };
