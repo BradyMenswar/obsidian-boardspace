@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
 	BoardspaceDocumentV2,
+	BoardspaceMediaCard,
 	BoardspaceTableCard,
 	BoardspaceTextCard,
 	BoardspaceTodoCard,
@@ -197,6 +198,70 @@ test("round-trips to-do plain text, placement, preferred size, style, and task o
 	assert.equal(parsed.status, "editable");
 	if (parsed.status !== "editable") return;
 	assert.deepEqual(parsed.document.items["todo-1"], todo);
+	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
+test("round-trips media cards with owned plain-text captions and deterministic attachment references", () => {
+	const media: BoardspaceMediaCard = {
+		id: "media-1",
+		kind: "media",
+		attachmentPath: "Attachments/demo image.png",
+		caption: "Literal **caption** text",
+		metadata: {
+			type: "image",
+			name: "demo image.png",
+			mimeType: "image/png",
+			width: 1600,
+			height: 900,
+			isAnimated: false,
+			fileSize: 48123,
+			pixelRatio: 2,
+			altText: "A demo image",
+		},
+		placement: { type: "root", order: 2, position: { x: 90, y: 140 } },
+		preferredSize: { width: 480, height: 270 },
+		style: { opacity: 0.8 },
+	};
+	const document: BoardspaceDocumentV2 = {
+		schemaVersion: 2,
+		frontmatterLines: [],
+		items: {
+			"media-2": { ...media, id: "media-2", attachmentPath: "Attachments/zeta.mp4", metadata: { ...media.metadata, type: "video", name: "zeta.mp4", mimeType: "video/mp4", pixelRatio: undefined } },
+			"media-1": media,
+			"media-copy": { ...media, id: "media-copy", placement: { type: "root", order: 3, position: { x: 600, y: 140 } } },
+		},
+		textCardOrder: [],
+	};
+
+	const source = serializeBoardspaceDocument(document);
+	const parsed = parseBoardspaceDocument(source);
+
+	assert.equal(parsed.status, "editable");
+	if (parsed.status !== "editable") return;
+	assert.deepEqual(parsed.document.items["media-1"], media);
+	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+	assert.match(source, /<!-- boardspace-index:start -->\n## Attachments\n- !\[\[Attachments\/demo image\.png\]\]\n- !\[\[Attachments\/zeta\.mp4\]\]\n<!-- boardspace-index:end -->/);
+	assert.equal(source.match(/!\[\[Attachments\/demo image\.png\]\]/g)?.length, 1);
+	assert.doesNotMatch(source, /boardspace-text-card:start media-1/);
+});
+
+test("regenerates media attachment projection from canonical card data instead of reading it as authority", () => {
+	const media: BoardspaceMediaCard = {
+		id: "media-1",
+		kind: "media",
+		attachmentPath: "Attachments/current.png",
+		metadata: { type: "image", name: "current.png", mimeType: "image/png", width: 100, height: 80, isAnimated: false, altText: "" },
+		placement: { type: "root", order: 0, position: { x: 0, y: 0 } },
+		preferredSize: { width: 100, height: 80 },
+		style: { opacity: 1 },
+	};
+	const source = serializeBoardspaceDocument({ schemaVersion: 2, frontmatterLines: [], items: { "media-1": media }, textCardOrder: [] });
+	const forged = source.replace("![[Attachments/current.png]]", "![[Attachments/forged.png]]");
+	const parsed = parseBoardspaceDocument(forged);
+
+	assert.equal(parsed.status, "editable");
+	if (parsed.status !== "editable") return;
+	assert.equal((parsed.document.items["media-1"] as BoardspaceMediaCard).attachmentPath, "Attachments/current.png");
 	assert.equal(serializeBoardspaceDocument(parsed.document), source);
 });
 

@@ -38,6 +38,7 @@ import {
 	StylePanelTextAlignPicker,
 	Editor,
 	SelectTool,
+	TLAsset,
 	TLParentId,
 	TLShapePartial,
 	TLComponents,
@@ -81,6 +82,7 @@ import {
 	getBoardColumnLayoutResult,
 	getBoardColumnVisualOrder,
 } from "./board-column-layout";
+import { BOARD_NOTE_MIN_HEIGHT } from "./board-note-config";
 import {
 	BOARDSPACE_CUSTOM_COLOR,
 	BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
@@ -116,13 +118,17 @@ import {
 	addBoardspaceMediaCaptionActions,
 	BoardspaceContextMenu,
 	BoardspaceMediaCaptionStylePanel,
+	BOARDSPACE_MEDIA_CAPTION_META_KEY,
 	BOARDSPACE_MEDIA_CAPTION_TRANSLATIONS,
 	registerBoardspaceMediaCaptionNormalization,
 	useSelectedBoardspaceMediaCaption,
 } from "./boardspace-media-caption";
 import { BoardspaceToolbar } from "./boardspace-toolbar";
 import { BoardspaceZoomMenu } from "./boardspace-zoom-menu";
-import { createBoardspaceAssetStore } from "./boardspace-asset-store";
+import {
+	BOARDSPACE_VAULT_PATH_META_KEY,
+	createBoardspaceAssetStore,
+} from "./boardspace-asset-store";
 import {
 	preventTldrawCanvasesCausingObsidianGestures,
 	replaceCanvasDoubleClickWithBoardNote,
@@ -423,14 +429,56 @@ function createCanonicalCards(
 	editor: Editor,
 	state: Extract<BoardspaceEditorState, { kind: "canonical" }>,
 ) {
+	const assets: TLAsset[] = state.mediaCards.map((card) => {
+		const base = {
+			id: `asset:${card.id}` as TLAsset["id"],
+			typeName: "asset" as const,
+			meta: { [BOARDSPACE_VAULT_PATH_META_KEY]: card.attachmentPath },
+			props: {
+				w: card.metadata.width,
+				h: card.metadata.height,
+				name: card.metadata.name,
+				isAnimated: card.metadata.isAnimated,
+				mimeType: card.metadata.mimeType,
+				src: `asset:${card.id}`,
+				...(card.metadata.fileSize === undefined ? {} : { fileSize: card.metadata.fileSize }),
+			},
+		};
+		return card.metadata.type === "image"
+			? { ...base, type: "image" as const, props: { ...base.props, ...(card.metadata.pixelRatio === undefined ? {} : { pixelRatio: card.metadata.pixelRatio }) } }
+			: { ...base, type: "video" as const };
+	});
+	if (assets.length > 0) editor.createAssets(assets);
+
 	const cards = [
 		...state.textCards.map((card) => ({ kind: "text" as const, card })),
 		...state.todoCards.map((card) => ({ kind: "todo" as const, card })),
 		...state.tableCards.map((card) => ({ kind: "table" as const, card })),
 		...state.swatchCards.map((card) => ({ kind: "color-swatch" as const, card })),
+		...state.mediaCards.map((card) => ({ kind: "media" as const, card })),
 	].sort((a, b) => a.card.order - b.card.order);
 	editor.createShapes(
 		cards.map(({ kind, card }) => {
+			if (kind === "media") {
+				const base = {
+					id: `shape:${card.id}`,
+					type: card.metadata.type,
+					opacity: card.style.opacity,
+					x: card.position.x,
+					y: card.position.y,
+					props: {
+						w: card.preferredSize.width,
+						h: card.preferredSize.height,
+						playing: true,
+						url: "",
+						assetId: `asset:${card.id}` as TLAsset["id"],
+						altText: card.metadata.altText,
+					},
+				};
+				return card.metadata.type === "image"
+					? { ...base, type: "image" as const, props: { ...base.props, crop: null, flipX: false, flipY: false } }
+					: { ...base, type: "video" as const, props: { ...base.props, time: 0, autoplay: false } };
+			}
 			if (kind === "color-swatch") {
 				return {
 					id: `shape:${card.id}` as BoardSwatchShape["id"],
@@ -511,8 +559,31 @@ function createCanonicalCards(
 					w: card.preferredSize.width,
 				},
 			};
-		}),
+		}) as TLShapePartial[],
 	);
+
+	const captions = state.mediaCards.flatMap((card) => card.caption === undefined ? [] : [{
+		id: `shape:media-caption-${card.id}` as BoardNoteShape["id"],
+		parentId: `shape:${card.id}` as BoardNoteShape["parentId"],
+		type: "board-note" as const,
+		x: 0,
+		y: card.preferredSize.height,
+		meta: { [BOARDSPACE_MEDIA_CAPTION_META_KEY]: true },
+		props: {
+			color: "blue" as const,
+			customColor: "#6b7280",
+			dash: "solid" as const,
+			fill: "semi" as const,
+			h: BOARD_NOTE_MIN_HEIGHT,
+			markdown: card.caption,
+			minH: BOARD_NOTE_MIN_HEIGHT,
+			size: "m" as const,
+			topBarColor: BOARDSPACE_TRANSPARENT_TOP_BAR_COLOR,
+			topBarCustomColor: "#6b7280",
+			w: card.preferredSize.width,
+		},
+	}]);
+	if (captions.length > 0) editor.createShapes(captions);
 }
 
 function normalizeToSinglePage(editor: Editor) {

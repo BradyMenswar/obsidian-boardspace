@@ -40,7 +40,7 @@ const BOARDSPACE_MEDIA_REMOVE_CAPTION_ACTION_ID =
 const BOARDSPACE_MEDIA_CAPTION_LABEL_KEY = "boardspace.add-media-caption";
 const BOARDSPACE_MEDIA_REMOVE_CAPTION_LABEL_KEY =
 	"boardspace.remove-media-caption";
-const BOARDSPACE_MEDIA_CAPTION_META_KEY = "boardspaceMediaCaption";
+export const BOARDSPACE_MEDIA_CAPTION_META_KEY = "boardspaceMediaCaption";
 
 export type BoardspaceMediaShape = Extract<TLShape, { type: "image" | "video" }>;
 

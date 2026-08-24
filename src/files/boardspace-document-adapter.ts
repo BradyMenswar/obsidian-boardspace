@@ -4,6 +4,8 @@ import {
 	BoardspaceColorSwatchCard,
 	BoardspaceColorSwatchLabel,
 	BoardspaceDocumentV2,
+	BoardspaceMediaCard,
+	BoardspaceMediaMetadata,
 	BoardspaceTableCard,
 	BoardspaceTableColumn,
 	BoardspaceTableRow,
@@ -55,9 +57,30 @@ export interface BoardspaceEditorColorSwatchCard {
 	style: { opacity: number };
 }
 
-export type BoardspaceEditorState =
-	| { kind: "canonical"; textCards: BoardspaceEditorTextCard[]; todoCards: BoardspaceEditorTodoCard[]; tableCards: BoardspaceEditorTableCard[]; swatchCards: BoardspaceEditorColorSwatchCard[] }
-	| { kind: "snapshot"; snapshot: TLEditorSnapshot };
+export interface BoardspaceEditorMediaCard {
+	id: string;
+	attachmentPath: string;
+	caption?: string;
+	metadata: BoardspaceMediaMetadata;
+	order: number;
+	position: { x: number; y: number };
+	preferredSize: { width: number; height: number };
+	style: { opacity: number };
+}
+
+interface CanonicalEditorState {
+	kind: "canonical";
+	textCards: BoardspaceEditorTextCard[];
+	todoCards: BoardspaceEditorTodoCard[];
+	tableCards: BoardspaceEditorTableCard[];
+	swatchCards: BoardspaceEditorColorSwatchCard[];
+	mediaCards: BoardspaceEditorMediaCard[];
+}
+
+export type BoardspaceEditorState = CanonicalEditorState | { kind: "snapshot"; snapshot: TLEditorSnapshot };
+
+const VAULT_PATH_META_KEY = "boardspaceVaultPath";
+const MEDIA_CAPTION_META_KEY = "boardspaceMediaCaption";
 
 export function createSnapshotEditorState(snapshot: TLEditorSnapshot): BoardspaceEditorState {
 	return { kind: "snapshot", snapshot };
@@ -101,13 +124,16 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			const swatchCards = Object.values(result.document.items)
 				.filter((item): item is BoardspaceColorSwatchCard => item.kind === "color-swatch")
 				.map(toEditorColorSwatchCard);
-			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0 && swatchCards.length === 0;
+			const mediaCards = Object.values(result.document.items)
+				.filter((item): item is BoardspaceMediaCard => item.kind === "media")
+				.map(toEditorMediaCard);
+			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0 && swatchCards.length === 0 && mediaCards.length === 0;
 			return {
 				status: "editable",
 				sourceStatus: isEmpty ? "empty" : "loaded",
 				editorState: isEmpty
 					? undefined
-					: { kind: "canonical" as const, textCards, todoCards, tableCards, swatchCards },
+					: { kind: "canonical" as const, textCards, todoCards, tableCards, swatchCards, mediaCards },
 			};
 		},
 		serializeEditorState(editorState) {
@@ -123,6 +149,7 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 					...editorState.todoCards.map(toCanonicalTodoCard),
 					...editorState.tableCards.map(toCanonicalTableCard),
 					...editorState.swatchCards.map(toCanonicalColorSwatchCard),
+					...editorState.mediaCards.map(toCanonicalMediaCard),
 				]
 				: readCardsFromSnapshot(editorState.snapshot);
 			cards = renewDuplicatedTableIdentities(cards, document, tableCopyIdentityRemaps);
@@ -147,7 +174,7 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 }
 
 function renewDuplicatedTableIdentities(
-	cards: Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard>,
+	cards: Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard>,
 	loadedDocument: BoardspaceDocumentV2,
 	copyRemaps: Map<string, Map<string, string>>,
 ) {
@@ -190,6 +217,39 @@ function renewDuplicatedTableIdentities(
 
 function createNestedIdentity(prefix: string) {
 	return `${prefix}:${crypto.randomUUID()}`;
+}
+
+export function updateMediaAttachmentPath(
+	state: BoardspaceEditorState,
+	oldPath: string,
+	newPath: string,
+): { state: BoardspaceEditorState; changed: boolean } {
+	if (state.kind === "canonical") {
+		const changed = state.mediaCards.some((card) => card.attachmentPath === oldPath);
+		return changed
+			? { state: { ...state, mediaCards: state.mediaCards.map((card) => card.attachmentPath === oldPath ? { ...card, attachmentPath: newPath } : card) }, changed: true }
+			: { state, changed: false };
+	}
+
+	const snapshot = structuredClone(state.snapshot);
+	const store = snapshot.document?.store;
+	let changed = false;
+	if (isRecord(store)) {
+		for (const record of Object.values(store)) {
+			if (!isRecord(record) || record.typeName !== "asset" || !isRecord(record.meta) || record.meta[VAULT_PATH_META_KEY] !== oldPath) continue;
+			record.meta[VAULT_PATH_META_KEY] = newPath;
+			changed = true;
+		}
+	}
+	return changed ? { state: { kind: "snapshot", snapshot }, changed: true } : { state, changed: false };
+}
+
+export function editorStateReferencesMediaAttachment(state: BoardspaceEditorState, path: string) {
+	if (state.kind === "canonical") return state.mediaCards.some((card) => card.attachmentPath === path);
+	const store = state.snapshot.document?.store;
+	return isRecord(store) && Object.values(store).some((record) =>
+		isRecord(record) && record.typeName === "asset" && isRecord(record.meta) && record.meta[VAULT_PATH_META_KEY] === path,
+	);
 }
 
 function toEditorTextCard(card: BoardspaceTextCard): BoardspaceEditorTextCard {
@@ -236,6 +296,19 @@ function toEditorColorSwatchCard(card: BoardspaceColorSwatchCard): BoardspaceEdi
 		id: card.id,
 		color: card.color,
 		label: card.label,
+		order: card.placement.order,
+		position: { ...card.placement.position },
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+	};
+}
+
+function toEditorMediaCard(card: BoardspaceMediaCard): BoardspaceEditorMediaCard {
+	return {
+		id: card.id,
+		attachmentPath: card.attachmentPath,
+		...(card.caption === undefined ? {} : { caption: card.caption }),
+		metadata: { ...card.metadata },
 		order: card.placement.order,
 		position: { ...card.placement.position },
 		preferredSize: { ...card.preferredSize },
@@ -306,19 +379,31 @@ function toCanonicalColorSwatchCard(card: BoardspaceEditorColorSwatchCard): Boar
 	};
 }
 
-function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard> {
+function toCanonicalMediaCard(card: BoardspaceEditorMediaCard): BoardspaceMediaCard {
+	return {
+		id: card.id,
+		kind: "media",
+		attachmentPath: card.attachmentPath,
+		...(card.caption === undefined ? {} : { caption: card.caption }),
+		metadata: { ...card.metadata },
+		placement: { type: "root", order: card.order, position: { ...card.position } },
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+	};
+}
+
+function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard> {
 	const store = snapshot.document?.store;
 	if (!isRecord(store)) {
 		throw new Error("The editor representation is malformed; the complete save was blocked.");
 	}
 
-	const shapes: Record<string, unknown>[] = [];
+	const shapes = new Map<string, Record<string, unknown>>();
+	const assets = new Map<string, Record<string, unknown>>();
 	const pageIds: string[] = [];
 	let documentCount = 0;
 	for (const [recordId, record] of Object.entries(store)) {
-		if (!isRecord(record)) {
-			throw unsupportedRecord(recordId, "malformed");
-		}
+		if (!isRecord(record)) throw unsupportedRecord(recordId, "malformed");
 		if (record.typeName === "document") {
 			documentCount += 1;
 			continue;
@@ -327,22 +412,113 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceText
 			pageIds.push(recordId);
 			continue;
 		}
-		if (record.typeName !== "shape" || (record.type !== "board-note" && record.type !== "board-todo" && record.type !== "board-table" && record.type !== "board-swatch")) {
+		if (record.typeName === "asset" && (record.type === "image" || record.type === "video")) {
+			assets.set(recordId, record);
+			continue;
+		}
+		if (record.typeName !== "shape" || !["board-note", "board-todo", "board-table", "board-swatch", "image", "video"].includes(String(record.type))) {
 			throw unsupportedRecord(recordId, typeof record.type === "string" ? record.type : String(record.typeName));
 		}
-		shapes.push(record);
+		shapes.set(recordId, record);
 	}
 
 	if (documentCount !== 1 || pageIds.length !== 1) {
 		throw new Error("A Boardspace editor representation must contain one document and one editor page; the complete save was blocked.");
 	}
-	shapes.sort((a, b) => String(a.index).localeCompare(String(b.index)));
-	return shapes.map((shape, order) => {
-		if (shape.type === "board-todo") return readTodoCardShape(shape, order, pageIds[0]!);
-		if (shape.type === "board-table") return readTableCardShape(shape, order, pageIds[0]!);
-		if (shape.type === "board-swatch") return readColorSwatchShape(shape, order, pageIds[0]!);
-		return readTextCardShape(shape, order, pageIds[0]!);
+	const pageId = pageIds[0]!;
+	const rootShapes = Array.from(shapes.values()).filter((shape) => shape.parentId === pageId);
+	for (const [id, shape] of shapes) {
+		if (shape.parentId === pageId) continue;
+		if (shape.type !== "board-note" || !isRecord(shape.meta) || shape.meta[MEDIA_CAPTION_META_KEY] !== true || !shapes.has(String(shape.parentId))) {
+			throw unsupportedRecord(id, String(shape.type));
+		}
+	}
+
+	rootShapes.sort((a, b) => String(a.index).localeCompare(String(b.index)));
+	return rootShapes.map((shape, order) => {
+		if (shape.type === "board-todo") return readTodoCardShape(shape, order, pageId);
+		if (shape.type === "board-table") return readTableCardShape(shape, order, pageId);
+		if (shape.type === "board-swatch") return readColorSwatchShape(shape, order, pageId);
+		if (shape.type === "image" || shape.type === "video") return readMediaCardShape(shape, order, pageId, assets, shapes);
+		return readTextCardShape(shape, order, pageId);
 	});
+}
+
+function readMediaCardShape(
+	shape: Record<string, unknown>,
+	order: number,
+	pageId: string,
+	assets: Map<string, Record<string, unknown>>,
+	shapes: Map<string, Record<string, unknown>>,
+): BoardspaceMediaCard {
+	if (shape.type !== "image" && shape.type !== "video") {
+		throw new Error("A media-card editor record is malformed; the complete save was blocked.");
+	}
+	const mediaType = shape.type;
+	const props = shape.props;
+	const expectedProps = mediaType === "image"
+		? ["w", "h", "playing", "url", "assetId", "crop", "flipX", "flipY", "altText"]
+		: ["w", "h", "time", "playing", "autoplay", "url", "assetId", "altText"];
+	if (
+		typeof shape.id !== "string" || !shape.id.startsWith("shape:") || shape.parentId !== pageId ||
+		!isFiniteNumber(shape.x) || !isFiniteNumber(shape.y) || !isRecord(props) || !hasOnlyKeys(props, expectedProps) ||
+		!isPositiveNumber(props.w) || !isPositiveNumber(props.h) || typeof props.assetId !== "string" || typeof props.altText !== "string" ||
+		(mediaType === "image" && (props.crop !== null || props.flipX !== false || props.flipY !== false)) ||
+		!isFiniteNumber(shape.opacity) || shape.opacity < 0 || shape.opacity > 1 ||
+		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true ||
+		(isRecord(shape.meta) && Object.keys(shape.meta).length > 0)
+	) {
+		throw new Error("A media-card editor record is malformed; the complete save was blocked.");
+	}
+
+	const asset = assets.get(props.assetId);
+	if (!asset || asset.type !== shape.type || !isRecord(asset.props) || !isRecord(asset.meta)) {
+		throw new Error("A media card has a missing or malformed attachment asset; the complete save was blocked.");
+	}
+	const assetProps = asset.props;
+	const optionalAssetKeys = asset.type === "image" ? ["fileSize", "pixelRatio"] : ["fileSize"];
+	if (
+		!hasOnlyOptionalKeys(assetProps, ["w", "h", "name", "isAnimated", "mimeType", "src", ...optionalAssetKeys], optionalAssetKeys) ||
+		!isPositiveNumber(assetProps.w) || !isPositiveNumber(assetProps.h) || typeof assetProps.name !== "string" || assetProps.name.length === 0 ||
+		typeof assetProps.isAnimated !== "boolean" || (assetProps.mimeType !== null && typeof assetProps.mimeType !== "string") ||
+		(assetProps.fileSize !== undefined && (!isFiniteNumber(assetProps.fileSize) || assetProps.fileSize < 0)) ||
+		(assetProps.pixelRatio !== undefined && !isPositiveNumber(assetProps.pixelRatio)) ||
+		typeof asset.meta[VAULT_PATH_META_KEY] !== "string" || asset.meta[VAULT_PATH_META_KEY].length === 0
+	) {
+		throw new Error("A media card has malformed attachment metadata; the complete save was blocked.");
+	}
+
+	const captions = Array.from(shapes.values()).filter((candidate) => candidate.parentId === shape.id && isRecord(candidate.meta) && candidate.meta[MEDIA_CAPTION_META_KEY] === true);
+	if (captions.length > 1) throw new Error("A media card has more than one caption; the complete save was blocked.");
+	const captionProps = captions[0]?.props;
+	let caption: string | undefined;
+	if (captions[0]) {
+		if (!isRecord(captionProps) || typeof captionProps.markdown !== "string") {
+			throw new Error("A media-card caption is malformed; the complete save was blocked.");
+		}
+		caption = captionProps.markdown;
+	}
+
+	return {
+		id: shape.id.slice("shape:".length),
+		kind: "media",
+		attachmentPath: asset.meta[VAULT_PATH_META_KEY],
+		...(caption === undefined ? {} : { caption }),
+		metadata: {
+			type: mediaType,
+			name: assetProps.name,
+			mimeType: assetProps.mimeType,
+			width: assetProps.w,
+			height: assetProps.h,
+			isAnimated: assetProps.isAnimated,
+			...(assetProps.fileSize === undefined ? {} : { fileSize: assetProps.fileSize }),
+			...(assetProps.pixelRatio === undefined ? {} : { pixelRatio: assetProps.pixelRatio }),
+			altText: props.altText,
+		},
+		placement: { type: "root", order, position: { x: shape.x, y: shape.y } },
+		preferredSize: { width: props.w, height: props.h },
+		style: { opacity: shape.opacity },
+	};
 }
 
 function readTextCardShape(
@@ -518,6 +694,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: string[]) {
 	const keys = Object.keys(value);
 	return keys.length === allowedKeys.length && keys.every((key) => allowedKeys.includes(key));
+}
+
+function hasOnlyOptionalKeys(value: Record<string, unknown>, allowedKeys: string[], optionalKeys: string[]) {
+	const keys = Object.keys(value);
+	return keys.every((key) => allowedKeys.includes(key)) && allowedKeys.every((key) => optionalKeys.includes(key) || keys.includes(key));
 }
 
 function isHexColor(value: unknown): value is string {

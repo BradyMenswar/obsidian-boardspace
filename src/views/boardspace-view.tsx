@@ -2,6 +2,8 @@ import { AppContext } from "context/app-context";
 import {
 	BoardspaceEditorState,
 	createSchemaV2BoardspaceDocumentAdapter,
+	editorStateReferencesMediaAttachment,
+	updateMediaAttachmentPath,
 } from "files/boardspace-document-adapter";
 import { BoardspaceDocumentLifecycle } from "files/boardspace-document-lifecycle";
 import { Menu, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
@@ -109,6 +111,16 @@ export class BoardView extends TextFileView {
 				this.renderView();
 			}),
 		);
+		this.registerEvent(
+			this.app.vault.on("rename", (file, oldPath) => {
+				this.handleAttachmentRename(oldPath, file.path);
+			}),
+		);
+		this.registerEvent(
+			this.app.vault.on("delete", (file) => {
+				this.handleAttachmentDelete(file.path);
+			}),
+		);
 
 		this.root = createRoot(this.reactHost);
 		this.renderView();
@@ -165,6 +177,27 @@ export class BoardView extends TextFileView {
 			this.showUnsafeSaveNotice();
 		}
 	};
+
+	private handleAttachmentRename(oldPath: string, newPath: string) {
+		const loadOutcome = this.documentLifecycle.getLoadOutcome();
+		if (loadOutcome?.status !== "editable" || !loadOutcome.editorState) return;
+		const updated = updateMediaAttachmentPath(loadOutcome.editorState, oldPath, newPath);
+		if (!updated.changed) return;
+
+		this.handleSnapshotChange(updated.state);
+		this.renderVersion += 1;
+		this.renderView();
+	}
+
+	private handleAttachmentDelete(path: string) {
+		const loadOutcome = this.documentLifecycle.getLoadOutcome();
+		if (loadOutcome?.status !== "editable" || !loadOutcome.editorState || !editorStateReferencesMediaAttachment(loadOutcome.editorState, path)) return;
+
+		// Keep the canonical reference untouched and remount so the asset resolver
+		// renders the card as broken without discarding its recovery metadata.
+		this.renderVersion += 1;
+		this.renderView();
+	}
 
 	private async openAsMarkdown() {
 		if (!this.file) {

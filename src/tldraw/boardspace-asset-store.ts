@@ -1,7 +1,7 @@
 import { App, Notice, TFile } from "obsidian";
 import { TLAsset, TLAssetStore } from "tldraw";
 
-const BOARDSPACE_VAULT_PATH_META_KEY = "boardspaceVaultPath";
+export const BOARDSPACE_VAULT_PATH_META_KEY = "boardspaceVaultPath";
 
 export function createBoardspaceAssetStore(
 	app: App,

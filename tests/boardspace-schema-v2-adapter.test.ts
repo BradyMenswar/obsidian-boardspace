@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import {
 	createSchemaV2BoardspaceDocumentAdapter,
 	createSnapshotEditorState,
+	editorStateReferencesMediaAttachment,
+	updateMediaAttachmentPath,
 } from "../src/files/boardspace-document-adapter";
 import {
 	BoardspaceColorSwatchCard,
 	BoardspaceDocumentV2,
+	BoardspaceMediaCard,
 	BoardspaceTableCard,
 	BoardspaceTextCard,
 	createEmptyBoardspaceDocument,
@@ -128,6 +131,34 @@ const swatchDocument: BoardspaceDocumentV2 = {
 };
 const swatchSource = serializeBoardspaceDocument(swatchDocument);
 
+const mediaCard: BoardspaceMediaCard = {
+	id: "media-1",
+	kind: "media",
+	attachmentPath: "Attachments/photo.png",
+	caption: "A plain **caption**",
+	metadata: {
+		type: "image",
+		name: "photo.png",
+		mimeType: "image/png",
+		width: 1200,
+		height: 800,
+		isAnimated: false,
+		fileSize: 34567,
+		pixelRatio: 2,
+		altText: "A photo",
+	},
+	placement: { type: "root", order: 0, position: { x: 220, y: 180 } },
+	preferredSize: { width: 450, height: 300 },
+	style: { opacity: 0.9 },
+};
+const mediaDocument: BoardspaceDocumentV2 = {
+	schemaVersion: 2,
+	frontmatterLines: [],
+	textCardOrder: [],
+	items: { "media-1": mediaCard },
+};
+const mediaSource = serializeBoardspaceDocument(mediaDocument);
+
 const multiCardDocument: BoardspaceDocumentV2 = {
 	...populatedDocument,
 	textCardOrder: ["text-2", "text-1"],
@@ -194,6 +225,7 @@ test("round-trips one raw-Markdown text card through the complete editor represe
 		todoCards: [],
 		tableCards: [],
 		swatchCards: [],
+		mediaCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), populatedSource);
 });
@@ -223,6 +255,7 @@ test("round-trips a to-do card and stable task identities through the complete e
 		],
 		tableCards: [],
 		swatchCards: [],
+		mediaCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), todoSource);
 });
@@ -257,8 +290,97 @@ test("round-trips a table card and stable row and column identities through the 
 			}],
 		}],
 		swatchCards: [],
+		mediaCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), tableSource);
+});
+
+test("round-trips a media card and owned plain-text caption through the complete editor representation", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(mediaSource);
+
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable") return;
+	assert.deepEqual(loaded.editorState, {
+		kind: "canonical",
+		textCards: [],
+		todoCards: [],
+		tableCards: [],
+		swatchCards: [],
+		mediaCards: [{
+			id: "media-1",
+			attachmentPath: "Attachments/photo.png",
+			caption: "A plain **caption**",
+			metadata: mediaCard.metadata,
+			order: 0,
+			position: { x: 220, y: 180 },
+			preferredSize: { width: 450, height: 300 },
+			style: { opacity: 0.9 },
+		}],
+	});
+	assert.equal(adapter.serializeEditorState(loaded.editorState), mediaSource);
+});
+
+test("persists image asset metadata and an optional caption as one media card", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotMediaCard(snapshot, true);
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.deepEqual(reopened.document.items["media-1"], mediaCard);
+	assert.equal(Object.keys(reopened.document.items).length, 1);
+	assert.match(saved, /- !\[\[Attachments\/photo\.png\]\]/);
+});
+
+test("updates media attachment paths on rename and retains the last path when an attachment disappears", () => {
+	const loaded = createSchemaV2BoardspaceDocumentAdapter().loadSource(mediaSource);
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable" || !loaded.editorState) return;
+
+	const renamed = updateMediaAttachmentPath(loaded.editorState, "Attachments/photo.png", "Archive/photo.png");
+	assert.equal(renamed.changed, true);
+	assert.equal(renamed.state.kind, "canonical");
+	if (renamed.state.kind !== "canonical") return;
+	assert.equal(renamed.state.mediaCards[0]?.attachmentPath, "Archive/photo.png");
+	assert.deepEqual(renamed.state.mediaCards[0]?.metadata, mediaCard.metadata);
+	assert.equal(editorStateReferencesMediaAttachment(renamed.state, "Archive/photo.png"), true);
+
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotMediaCard(snapshot, false);
+	const renamedSnapshot = updateMediaAttachmentPath(
+		createSnapshotEditorState(snapshot),
+		"Attachments/photo.png",
+		"Archive/photo.png",
+	);
+	assert.equal(renamedSnapshot.changed, true);
+	assert.equal(editorStateReferencesMediaAttachment(renamedSnapshot.state, "Archive/photo.png"), true);
+	const snapshotAdapter = createSchemaV2BoardspaceDocumentAdapter();
+	snapshotAdapter.loadSource(emptySource);
+	const snapshotDocument = parseBoardspaceDocument(snapshotAdapter.serializeEditorState(renamedSnapshot.state));
+	assert.equal(snapshotDocument.status, "editable");
+	if (snapshotDocument.status !== "editable") return;
+	assert.equal((snapshotDocument.document.items["media-1"] as BoardspaceMediaCard).attachmentPath, "Archive/photo.png");
+
+	// Delete events intentionally leave state unchanged, retaining recovery data
+	// while the asset resolver displays the missing attachment as broken.
+	assert.equal(renamed.state.mediaCards[0]?.attachmentPath, "Archive/photo.png");
+});
+
+test("deleting a media card removes only its canonical reference", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(mediaSource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.deepEqual(reopened.document.items, {});
+	assert.doesNotMatch(saved, /Attachments\/photo\.png/);
 });
 
 test("round-trips a color swatch using Boardspace-owned color, label, placement, size, and style values", () => {
@@ -281,6 +403,7 @@ test("round-trips a color swatch using Boardspace-owned color, label, placement,
 			preferredSize: { width: 280, height: 160 },
 			style: { opacity: 0.7 },
 		}],
+		mediaCards: [],
 	});
 	const saved = adapter.serializeEditorState(loaded.editorState);
 	assert.equal(saved, swatchSource);
@@ -600,6 +723,27 @@ test("returns exact read-only diagnostics and preserves invalid source", () => {
 	});
 	assert.equal(adapter.serializeEditorState(undefined), source);
 });
+
+function addSnapshotMediaCard(snapshot: BoardspaceSnapshot, includeCaption: boolean) {
+	const store = snapshot.document.store as Record<string, unknown>;
+	store["asset:media-1"] = {
+		id: "asset:media-1", typeName: "asset", type: "image",
+		meta: { boardspaceVaultPath: "Attachments/photo.png" },
+		props: { w: 1200, h: 800, name: "photo.png", isAnimated: false, mimeType: "image/png", src: "asset:media-1", fileSize: 34567, pixelRatio: 2 },
+	};
+	store["shape:media-1"] = {
+		id: "shape:media-1", typeName: "shape", type: "image", parentId: "page:page", index: "a1",
+		opacity: 0.9, x: 220, y: 180,
+		props: { w: 450, h: 300, playing: true, url: "", assetId: "asset:media-1", crop: null, flipX: false, flipY: false, altText: "A photo" },
+	};
+	if (includeCaption) {
+		store["shape:media-caption"] = {
+			id: "shape:media-caption", typeName: "shape", type: "board-note", parentId: "shape:media-1", index: "a1",
+			opacity: 1, x: 0, y: 300, meta: { boardspaceMediaCaption: true },
+			props: { color: "blue", customColor: "#6b7280", dash: "solid", fill: "semi", h: 96, markdown: "A plain **caption**", minH: 96, size: "m", topBarColor: "transparent", topBarCustomColor: "#6b7280", w: 450 },
+		};
+	}
+}
 
 function addSnapshotTextCard(
 	snapshot: BoardspaceSnapshot,

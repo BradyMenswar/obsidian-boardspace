@@ -5,7 +5,9 @@ export const BOARDSPACE_SCHEMA_VERSION = 2 as const;
 const STRUCTURED_BLOCK_PATTERN = /^```boardspace[ \t]*\r?\n([\s\S]*?)^```[ \t]*$/gm;
 const FRONTMATTER_PATTERN = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/;
 const TEXT_CARD_REGION_PATTERN = /^<!-- boardspace-text-card:start ([A-Za-z0-9_.:]+(?:-[A-Za-z0-9_.:]+)*) -->[ \t]*\r?\n([\s\S]*?)\r?\n<!-- boardspace-text-card:end \1 -->[ \t]*\r?$/gm;
-const INDEX_PROJECTION = "<!-- boardspace-index:start -->\n<!-- boardspace-index:end -->";
+const INDEX_PROJECTION_START = "<!-- boardspace-index:start -->";
+const INDEX_PROJECTION_END = "<!-- boardspace-index:end -->";
+const INDEX_PROJECTION_PATTERN = /^<!-- boardspace-index:start -->\r?\n[\s\S]*?<!-- boardspace-index:end -->$/;
 const KNOWN_ITEM_KINDS = new Set([
 	"text",
 	"todo",
@@ -104,7 +106,34 @@ export interface BoardspaceColorSwatchCard {
 	style: { opacity: number };
 }
 
-export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard;
+export interface BoardspaceMediaMetadata {
+	type: "image" | "video";
+	name: string;
+	mimeType: string | null;
+	width: number;
+	height: number;
+	isAnimated: boolean;
+	fileSize?: number;
+	pixelRatio?: number;
+	altText: string;
+}
+
+export interface BoardspaceMediaCard {
+	id: string;
+	kind: "media";
+	attachmentPath: string;
+	caption?: string;
+	metadata: BoardspaceMediaMetadata;
+	placement: {
+		type: "root";
+		order: number;
+		position: { x: number; y: number };
+	};
+	preferredSize: { width: number; height: number };
+	style: { opacity: number };
+}
+
+export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard;
 
 export interface BoardspaceDocumentV2 {
 	schemaVersion: typeof BOARDSPACE_SCHEMA_VERSION;
@@ -207,7 +236,7 @@ export function parseBoardspaceDocument(
 		return readOnly(source, regionsResult.code, regionsResult.message);
 	}
 	const afterBlock = body.slice(blockStart + block[0].length).trim();
-	if (afterBlock !== INDEX_PROJECTION) {
+	if (!INDEX_PROJECTION_PATTERN.test(afterBlock)) {
 		return readOnly(source, "index-projection-malformed", "The Boardspace index projection is missing or malformed.");
 	}
 
@@ -264,8 +293,9 @@ export function serializeBoardspaceDocument(document: BoardspaceDocumentV2): str
 		2,
 	);
 	const bodyPrefix = regions ? `${regions}\n\n` : "";
+	const indexProjection = serializeIndexProjection(document.items);
 
-	return `---\ntype: boardspace\nboard-version: ${BOARDSPACE_SCHEMA_VERSION}${unrelatedFrontmatter}\n---\n\n${bodyPrefix}\`\`\`boardspace\n${structuredData}\n\`\`\`\n\n${INDEX_PROJECTION}\n`;
+	return `---\ntype: boardspace\nboard-version: ${BOARDSPACE_SCHEMA_VERSION}${unrelatedFrontmatter}\n---\n\n${bodyPrefix}\`\`\`boardspace\n${structuredData}\n\`\`\`\n\n${indexProjection}\n`;
 }
 
 function parseTextCardRegions(source: string):
@@ -327,7 +357,7 @@ function validateStructuredData(
 		if (!KNOWN_ITEM_KINDS.has(item.kind)) {
 			return invalid("unknown-item-kind", `Unknown Boardspace canvas item kind: ${item.kind}.`);
 		}
-		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch") {
+		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch" && item.kind !== "media") {
 			return invalid("canvas-content-not-supported", `Boardspace canvas item kind ${item.kind} is not supported yet.`);
 		}
 	}
@@ -359,6 +389,13 @@ function validateStructuredData(
 		if (isRecord(rawItem) && rawItem.kind === "color-swatch") {
 			if (!isColorSwatchCardData(key, rawItem)) {
 				return invalidData(`Boardspace color swatch ${key} is malformed; use a six-digit hex color, a supported plain-text label setting, and opacity from 0 to 1.`);
+			}
+			items[key] = rawItem;
+			continue;
+		}
+		if (isRecord(rawItem) && rawItem.kind === "media") {
+			if (!isMediaCardData(key, rawItem)) {
+				return invalidData(`Boardspace media card ${key} has a malformed attachment reference, caption, metadata, placement, preferred size, or visual style.`);
 			}
 			items[key] = rawItem;
 			continue;
@@ -403,7 +440,7 @@ function validateStructuredData(
 	return { status: "valid", items, textCardOrder: [...textCardOrder] };
 }
 
-function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard {
+function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard {
 	if (item.kind !== "text") return item;
 	return {
 		id: item.id,
@@ -440,6 +477,37 @@ function isColorSwatchCardData(key: string, value: unknown): value is Boardspace
 	if (value.id !== key || value.kind !== "color-swatch" || !isHexColor(value.color) || typeof value.label !== "string" || !SWATCH_LABELS.has(value.label)) return false;
 	if (!isRootPlacementAndPreferredSize(value) || !isRecord(value.style) || !hasOnlyKeys(value.style, ["opacity"])) return false;
 	return isFiniteNumber(value.style.opacity) && value.style.opacity >= 0 && value.style.opacity <= 1;
+}
+
+function isMediaCardData(key: string, value: unknown): value is BoardspaceMediaCard {
+	if (!isRecord(value) || !hasOnlyOptionalKeys(value, ["id", "kind", "attachmentPath", "caption", "metadata", "placement", "preferredSize", "style"], ["caption"])) return false;
+	if (value.id !== key || value.kind !== "media" || !isVaultPath(value.attachmentPath) || (value.caption !== undefined && typeof value.caption !== "string")) return false;
+	if (!isRootPlacementAndPreferredSize(value) || !isRecord(value.style) || !hasOnlyKeys(value.style, ["opacity"]) || !isOpacity(value.style.opacity)) return false;
+	if (!isRecord(value.metadata) || !hasOnlyOptionalKeys(value.metadata, ["type", "name", "mimeType", "width", "height", "isAnimated", "fileSize", "pixelRatio", "altText"], ["fileSize", "pixelRatio"])) return false;
+	const metadata = value.metadata;
+	return (metadata.type === "image" || metadata.type === "video") &&
+		typeof metadata.name === "string" && metadata.name.length > 0 &&
+		(metadata.mimeType === null || typeof metadata.mimeType === "string") &&
+		isPositiveNumber(metadata.width) && isPositiveNumber(metadata.height) &&
+		typeof metadata.isAnimated === "boolean" && typeof metadata.altText === "string" &&
+		(metadata.fileSize === undefined || isFiniteNumber(metadata.fileSize) && metadata.fileSize >= 0) &&
+		(metadata.pixelRatio === undefined || metadata.type === "image" && isPositiveNumber(metadata.pixelRatio));
+}
+
+function serializeIndexProjection(items: Record<string, BoardspaceCanvasItem>) {
+	const paths = Array.from(new Set(
+		Object.values(items)
+			.filter((item): item is BoardspaceMediaCard => item.kind === "media")
+			.map((item) => item.attachmentPath),
+	)).sort((a, b) => a.localeCompare(b));
+	const content = paths.length > 0
+		? `\n## Attachments\n${paths.map((path) => `- ![[${escapeWikiLinkTarget(path)}]]`).join("\n")}`
+		: "";
+	return `${INDEX_PROJECTION_START}${content}\n${INDEX_PROJECTION_END}`;
+}
+
+function escapeWikiLinkTarget(path: string) {
+	return path.replace(/\\/g, "/").replace(/\|/g, "\\|").replace(/\]/g, "\\]");
 }
 
 function validateTableCard(
@@ -499,6 +567,9 @@ function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>
 		const itemId = item.id;
 		if (item.kind === "color-swatch" && !isColorSwatchCardData(itemId, item)) {
 			throw new Error(`Color swatch ${itemId} has an invalid color, label, placement, preferred size, or visual style; the complete save was blocked.`);
+		}
+		if (item.kind === "media" && !isMediaCardData(itemId, item)) {
+			throw new Error(`Media card ${itemId} has a malformed attachment reference, caption, metadata, placement, preferred size, or visual style; the complete save was blocked.`);
 		}
 		if (item.kind === "todo") {
 			for (const task of item.tasks) {
@@ -563,6 +634,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isHexColor(value: unknown): value is string {
 	return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+function hasOnlyOptionalKeys(value: Record<string, unknown>, allowedKeys: string[], optionalKeys: string[]) {
+	const keys = Object.keys(value);
+	return keys.every((key) => allowedKeys.includes(key)) &&
+		allowedKeys.every((key) => optionalKeys.includes(key) || keys.includes(key));
+}
+
+function isVaultPath(value: unknown): value is string {
+	return typeof value === "string" && value.trim() === value && value.length > 0 && !value.startsWith("/") && !value.includes("\\");
+}
+
+function isOpacity(value: unknown): value is number {
+	return isFiniteNumber(value) && value >= 0 && value <= 1;
 }
 
 function isFiniteNumber(value: unknown): value is number {
