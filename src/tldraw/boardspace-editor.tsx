@@ -354,6 +354,21 @@ function BoardspaceEditorInner({
 			className="boardspace-editor"
 			data-board-file={file?.path ?? ""}
 			data-canvas-tone={currentTone}
+			onKeyDownCapture={(event) => {
+				const target = event.target;
+				if (
+					!editor ||
+					(target instanceof Element && target.closest(".cm-editor"))
+				) {
+					return;
+				}
+				getBoardspaceDocumentHistory(editor).beforeCanvasCommand();
+			}}
+			onPointerDownCapture={() => {
+				if (editor) {
+					getBoardspaceDocumentHistory(editor).beforeCanvasCommand();
+				}
+			}}
 		>
 			<BoardspaceFileProvider value={file?.path ?? ""}>
 				<Tldraw

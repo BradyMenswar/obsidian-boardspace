@@ -134,21 +134,7 @@ export function registerBoardspaceDocumentHistory(editor: Editor) {
 	});
 	histories.set(editor, history);
 
-	const container = editor.getContainer();
-	const handlePointerDown = () => history.beforeCanvasCommand();
-	const handleKeyDown = (event: KeyboardEvent) => {
-		const target = event.target;
-		if (target instanceof Element && target.closest(".cm-editor")) {
-			return;
-		}
-		history.beforeCanvasCommand();
-	};
-	container.addEventListener("pointerdown", handlePointerDown, true);
-	container.addEventListener("keydown", handleKeyDown, true);
-
 	return () => {
-		container.removeEventListener("pointerdown", handlePointerDown, true);
-		container.removeEventListener("keydown", handleKeyDown, true);
 		history.dispose();
 		if (histories.get(editor) === history) {
 			histories.delete(editor);
