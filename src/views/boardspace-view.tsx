@@ -2,7 +2,9 @@ import { AppContext } from "context/app-context";
 import {
 	BoardspaceEditorState,
 	createSchemaV2BoardspaceDocumentAdapter,
+	editorStateReferencesBoardLinkTarget,
 	editorStateReferencesMediaAttachment,
+	updateBoardLinkTargetPath,
 	updateMediaAttachmentPath,
 } from "files/boardspace-document-adapter";
 import { BoardspaceDocumentLifecycle } from "files/boardspace-document-lifecycle";
@@ -113,12 +115,12 @@ export class BoardView extends TextFileView {
 		);
 		this.registerEvent(
 			this.app.vault.on("rename", (file, oldPath) => {
-				this.handleAttachmentRename(oldPath, file.path);
+				this.handleVaultRename(oldPath, file.path);
 			}),
 		);
 		this.registerEvent(
 			this.app.vault.on("delete", (file) => {
-				this.handleAttachmentDelete(file.path);
+				this.handleVaultDelete(file.path);
 			}),
 		);
 
@@ -178,23 +180,29 @@ export class BoardView extends TextFileView {
 		}
 	};
 
-	private handleAttachmentRename(oldPath: string, newPath: string) {
+	private handleVaultRename(oldPath: string, newPath: string) {
 		const loadOutcome = this.documentLifecycle.getLoadOutcome();
 		if (loadOutcome?.status !== "editable" || !loadOutcome.editorState) return;
-		const updated = updateMediaAttachmentPath(loadOutcome.editorState, oldPath, newPath);
-		if (!updated.changed) return;
+		const mediaUpdate = updateMediaAttachmentPath(loadOutcome.editorState, oldPath, newPath);
+		const boardLinkUpdate = updateBoardLinkTargetPath(mediaUpdate.state, oldPath, newPath);
+		if (!mediaUpdate.changed && !boardLinkUpdate.changed) return;
 
-		this.handleSnapshotChange(updated.state);
+		this.handleSnapshotChange(boardLinkUpdate.state);
 		this.renderVersion += 1;
 		this.renderView();
 	}
 
-	private handleAttachmentDelete(path: string) {
+	private handleVaultDelete(path: string) {
 		const loadOutcome = this.documentLifecycle.getLoadOutcome();
-		if (loadOutcome?.status !== "editable" || !loadOutcome.editorState || !editorStateReferencesMediaAttachment(loadOutcome.editorState, path)) return;
+		if (
+			loadOutcome?.status !== "editable" ||
+			!loadOutcome.editorState ||
+			(!editorStateReferencesMediaAttachment(loadOutcome.editorState, path) &&
+				!editorStateReferencesBoardLinkTarget(loadOutcome.editorState, path))
+		) return;
 
-		// Keep the canonical reference untouched and remount so the asset resolver
-		// renders the card as broken without discarding its recovery metadata.
+		// Keep canonical references untouched and remount so resolvers render the
+		// cards as broken without discarding their recovery paths or metadata.
 		this.renderVersion += 1;
 		this.renderView();
 	}

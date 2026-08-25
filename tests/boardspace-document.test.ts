@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+	BoardspaceBoardLinkCard,
 	BoardspaceDocumentV2,
 	BoardspaceMediaCard,
 	BoardspaceTableCard,
@@ -199,6 +200,64 @@ test("round-trips to-do plain text, placement, preferred size, style, and task o
 	if (parsed.status !== "editable") return;
 	assert.deepEqual(parsed.document.items["todo-1"], todo);
 	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+});
+
+test("round-trips board links and deterministically projects canonical board and media references", () => {
+	const boardLink: BoardspaceBoardLinkCard = {
+		id: "board-link-1",
+		kind: "board-link",
+		targetPath: "Projects/Board ] A|plan.md",
+		title: "Board **title**",
+		icon: "layers",
+		placement: { type: "root", order: 1, position: { x: 120, y: 80 } },
+		preferredSize: { width: 210, height: 168 },
+		style: {
+			color: "grey",
+			customColor: "#6b7280",
+			dash: "solid",
+			fill: "semi",
+			opacity: 0.85,
+			size: "m",
+			topBarColor: "transparent",
+			topBarCustomColor: "#f8fafc",
+		},
+	};
+	const media: BoardspaceMediaCard = {
+		id: "media-1",
+		kind: "media",
+		attachmentPath: "Attachments/photo ] copy|one.png",
+		metadata: { type: "image", name: "photo.png", mimeType: "image/png", width: 100, height: 80, isAnimated: false, altText: "" },
+		placement: { type: "root", order: 0, position: { x: 0, y: 0 } },
+		preferredSize: { width: 100, height: 80 },
+		style: { opacity: 1 },
+	};
+	const source = serializeBoardspaceDocument({
+		schemaVersion: 2,
+		frontmatterLines: [],
+		items: {
+			"board-link-copy": { ...boardLink, id: "board-link-copy", placement: { ...boardLink.placement, order: 2 } },
+			"media-1": media,
+			"board-link-1": boardLink,
+		},
+		textCardOrder: [],
+	});
+	const parsed = parseBoardspaceDocument(source);
+
+	assert.equal(parsed.status, "editable");
+	if (parsed.status !== "editable") return;
+	assert.deepEqual(parsed.document.items["board-link-1"], boardLink);
+	assert.equal(serializeBoardspaceDocument(parsed.document), source);
+	assert.match(source, /## Board links\n- \[\[Projects\/Board \\] A\\\|plan\]\]/);
+	assert.equal(source.match(/\[\[Projects\/Board \\] A\\\|plan\]\]/g)?.length, 1);
+	assert.match(source, /## Attachments\n- !\[\[Attachments\/photo \\] copy\\\|one\.png\]\]/);
+	assert.doesNotMatch(source, /boardCount|cardCount|typeName|page:/);
+
+	const forged = source.replace("- [[Projects/Board \\] A\\|plan]]", "- [[Projects/Forged]]");
+	const reparsed = parseBoardspaceDocument(forged);
+	assert.equal(reparsed.status, "editable");
+	if (reparsed.status !== "editable") return;
+	assert.equal((reparsed.document.items["board-link-1"] as BoardspaceBoardLinkCard).targetPath, boardLink.targetPath);
+	assert.equal(serializeBoardspaceDocument(reparsed.document), source);
 });
 
 test("round-trips media cards with owned plain-text captions and deterministic attachment references", () => {

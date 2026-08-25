@@ -1,6 +1,8 @@
 import type { TLEditorSnapshot } from "tldraw";
 import type { BoardspaceDocumentAdapter } from "./boardspace-document-lifecycle";
 import {
+	BoardspaceBoardLinkCard,
+	BoardspaceBoardLinkIcon,
 	BoardspaceColorSwatchCard,
 	BoardspaceColorSwatchLabel,
 	BoardspaceDocumentV2,
@@ -68,6 +70,17 @@ export interface BoardspaceEditorMediaCard {
 	style: { opacity: number };
 }
 
+export interface BoardspaceEditorBoardLinkCard {
+	id: string;
+	targetPath: string;
+	title: string;
+	icon: BoardspaceBoardLinkIcon;
+	order: number;
+	position: { x: number; y: number };
+	preferredSize: { width: number; height: number };
+	style: BoardspaceTextCardStyle;
+}
+
 interface CanonicalEditorState {
 	kind: "canonical";
 	textCards: BoardspaceEditorTextCard[];
@@ -75,6 +88,7 @@ interface CanonicalEditorState {
 	tableCards: BoardspaceEditorTableCard[];
 	swatchCards: BoardspaceEditorColorSwatchCard[];
 	mediaCards: BoardspaceEditorMediaCard[];
+	boardLinkCards: BoardspaceEditorBoardLinkCard[];
 }
 
 export type BoardspaceEditorState = CanonicalEditorState | { kind: "snapshot"; snapshot: TLEditorSnapshot };
@@ -127,13 +141,16 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			const mediaCards = Object.values(result.document.items)
 				.filter((item): item is BoardspaceMediaCard => item.kind === "media")
 				.map(toEditorMediaCard);
-			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0 && swatchCards.length === 0 && mediaCards.length === 0;
+			const boardLinkCards = Object.values(result.document.items)
+				.filter((item): item is BoardspaceBoardLinkCard => item.kind === "board-link")
+				.map(toEditorBoardLinkCard);
+			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0 && swatchCards.length === 0 && mediaCards.length === 0 && boardLinkCards.length === 0;
 			return {
 				status: "editable",
 				sourceStatus: isEmpty ? "empty" : "loaded",
 				editorState: isEmpty
 					? undefined
-					: { kind: "canonical" as const, textCards, todoCards, tableCards, swatchCards, mediaCards },
+					: { kind: "canonical" as const, textCards, todoCards, tableCards, swatchCards, mediaCards, boardLinkCards },
 			};
 		},
 		serializeEditorState(editorState) {
@@ -150,6 +167,7 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 					...editorState.tableCards.map(toCanonicalTableCard),
 					...editorState.swatchCards.map(toCanonicalColorSwatchCard),
 					...editorState.mediaCards.map(toCanonicalMediaCard),
+					...editorState.boardLinkCards.map(toCanonicalBoardLinkCard),
 				]
 				: readCardsFromSnapshot(editorState.snapshot);
 			cards = renewDuplicatedTableIdentities(cards, document, tableCopyIdentityRemaps);
@@ -174,7 +192,7 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 }
 
 function renewDuplicatedTableIdentities(
-	cards: Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard>,
+	cards: Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard | BoardspaceBoardLinkCard>,
 	loadedDocument: BoardspaceDocumentV2,
 	copyRemaps: Map<string, Map<string, string>>,
 ) {
@@ -244,6 +262,39 @@ export function updateMediaAttachmentPath(
 	return changed ? { state: { kind: "snapshot", snapshot }, changed: true } : { state, changed: false };
 }
 
+export function updateBoardLinkTargetPath(
+	state: BoardspaceEditorState,
+	oldPath: string,
+	newPath: string,
+): { state: BoardspaceEditorState; changed: boolean } {
+	if (state.kind === "canonical") {
+		const changed = state.boardLinkCards.some((card) => card.targetPath === oldPath);
+		return changed
+			? { state: { ...state, boardLinkCards: state.boardLinkCards.map((card) => card.targetPath === oldPath ? { ...card, targetPath: newPath } : card) }, changed: true }
+			: { state, changed: false };
+	}
+
+	const snapshot = structuredClone(state.snapshot);
+	const store = snapshot.document?.store;
+	let changed = false;
+	if (isRecord(store)) {
+		for (const record of Object.values(store)) {
+			if (!isRecord(record) || record.typeName !== "shape" || record.type !== "board-link" || !isRecord(record.props) || record.props.filePath !== oldPath) continue;
+			record.props.filePath = newPath;
+			changed = true;
+		}
+	}
+	return changed ? { state: { kind: "snapshot", snapshot }, changed: true } : { state, changed: false };
+}
+
+export function editorStateReferencesBoardLinkTarget(state: BoardspaceEditorState, path: string) {
+	if (state.kind === "canonical") return state.boardLinkCards.some((card) => card.targetPath === path);
+	const store = state.snapshot.document?.store;
+	return isRecord(store) && Object.values(store).some((record) =>
+		isRecord(record) && record.typeName === "shape" && record.type === "board-link" && isRecord(record.props) && record.props.filePath === path,
+	);
+}
+
 export function editorStateReferencesMediaAttachment(state: BoardspaceEditorState, path: string) {
 	if (state.kind === "canonical") return state.mediaCards.some((card) => card.attachmentPath === path);
 	const store = state.snapshot.document?.store;
@@ -309,6 +360,19 @@ function toEditorMediaCard(card: BoardspaceMediaCard): BoardspaceEditorMediaCard
 		attachmentPath: card.attachmentPath,
 		...(card.caption === undefined ? {} : { caption: card.caption }),
 		metadata: { ...card.metadata },
+		order: card.placement.order,
+		position: { ...card.placement.position },
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+	};
+}
+
+function toEditorBoardLinkCard(card: BoardspaceBoardLinkCard): BoardspaceEditorBoardLinkCard {
+	return {
+		id: card.id,
+		targetPath: card.targetPath,
+		title: card.title,
+		icon: card.icon,
 		order: card.placement.order,
 		position: { ...card.placement.position },
 		preferredSize: { ...card.preferredSize },
@@ -392,7 +456,20 @@ function toCanonicalMediaCard(card: BoardspaceEditorMediaCard): BoardspaceMediaC
 	};
 }
 
-function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard> {
+function toCanonicalBoardLinkCard(card: BoardspaceEditorBoardLinkCard): BoardspaceBoardLinkCard {
+	return {
+		id: card.id,
+		kind: "board-link",
+		targetPath: card.targetPath,
+		title: card.title,
+		icon: card.icon,
+		placement: { type: "root", order: card.order, position: { ...card.position } },
+		preferredSize: { ...card.preferredSize },
+		style: { ...card.style },
+	};
+}
+
+function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard | BoardspaceBoardLinkCard> {
 	const store = snapshot.document?.store;
 	if (!isRecord(store)) {
 		throw new Error("The editor representation is malformed; the complete save was blocked.");
@@ -416,7 +493,7 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceText
 			assets.set(recordId, record);
 			continue;
 		}
-		if (record.typeName !== "shape" || !["board-note", "board-todo", "board-table", "board-swatch", "image", "video"].includes(String(record.type))) {
+		if (record.typeName !== "shape" || !["board-note", "board-todo", "board-table", "board-swatch", "board-link", "image", "video"].includes(String(record.type))) {
 			throw unsupportedRecord(recordId, typeof record.type === "string" ? record.type : String(record.typeName));
 		}
 		shapes.set(recordId, record);
@@ -439,9 +516,40 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): Array<BoardspaceText
 		if (shape.type === "board-todo") return readTodoCardShape(shape, order, pageId);
 		if (shape.type === "board-table") return readTableCardShape(shape, order, pageId);
 		if (shape.type === "board-swatch") return readColorSwatchShape(shape, order, pageId);
+		if (shape.type === "board-link") return readBoardLinkShape(shape, order, pageId);
 		if (shape.type === "image" || shape.type === "video") return readMediaCardShape(shape, order, pageId, assets, shapes);
 		return readTextCardShape(shape, order, pageId);
 	});
+}
+
+function readBoardLinkShape(
+	shape: Record<string, unknown>,
+	order: number,
+	pageId: string,
+): BoardspaceBoardLinkCard {
+	const props = shape.props;
+	if (
+		typeof shape.id !== "string" || !shape.id.startsWith("shape:") || shape.parentId !== pageId ||
+		!isFiniteNumber(shape.x) || !isFiniteNumber(shape.y) || !isRecord(props) ||
+		!hasOnlyKeys(props, ["boardCount", "cardCount", "color", "customColor", "dash", "filePath", "fill", "h", "icon", "size", "title", "topBarColor", "topBarCustomColor", "w"]) ||
+		typeof props.filePath !== "string" || typeof props.title !== "string" || !isBoardLinkIcon(props.icon) ||
+		!isPositiveNumber(props.w) || !isPositiveNumber(props.h) ||
+		!isFiniteNumber(shape.opacity) || shape.opacity < 0 || shape.opacity > 1 ||
+		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true ||
+		(isRecord(shape.meta) && Object.keys(shape.meta).length > 0)
+	) {
+		throw new Error("A board-link editor record is malformed; the complete save was blocked.");
+	}
+	return {
+		id: shape.id.slice("shape:".length),
+		kind: "board-link",
+		targetPath: props.filePath,
+		title: props.title,
+		icon: props.icon,
+		placement: { type: "root", order, position: { x: shape.x, y: shape.y } },
+		preferredSize: { width: props.w, height: props.h },
+		style: readTextCardStyle(props, shape.opacity),
+	};
 }
 
 function readMediaCardShape(
@@ -644,6 +752,10 @@ function readColorSwatchShape(
 		preferredSize: { width: props.w, height: props.h },
 		style: { opacity: shape.opacity },
 	};
+}
+
+function isBoardLinkIcon(value: unknown): value is BoardspaceBoardLinkIcon {
+	return value === "board" || value === "bookmark" || value === "folder" || value === "lightbulb" || value === "layers" || value === "sparkle";
 }
 
 function isTodoTask(value: unknown): value is BoardspaceTodoTask {

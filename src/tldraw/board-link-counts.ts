@@ -1,4 +1,5 @@
 import { TLEditorSnapshot } from "tldraw";
+import type { BoardspaceDocumentV2 } from "../files/boardspace-document";
 
 export interface BoardLinkCounts {
 	boardCount: number;
@@ -8,6 +9,7 @@ export interface BoardLinkCounts {
 const BOARD_LINK_CARD_TYPES = new Set([
 	"board-note",
 	"board-swatch",
+	"board-table",
 	"board-todo",
 	"image",
 	"video",
@@ -48,6 +50,16 @@ export function getBoardLinkCountsFromSnapshot(
 		cardCount += 1;
 	}
 
+	return { boardCount, cardCount };
+}
+
+export function getBoardLinkCountsFromDocument(document: BoardspaceDocumentV2): BoardLinkCounts {
+	let boardCount = 0;
+	let cardCount = 0;
+	for (const item of Object.values(document.items)) {
+		if (item.kind === "board-link") boardCount += 1;
+		else cardCount += 1;
+	}
 	return { boardCount, cardCount };
 }
 

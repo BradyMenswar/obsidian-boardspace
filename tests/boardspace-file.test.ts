@@ -11,8 +11,10 @@ import {
 	BOARDSPACE_FILE_VERSION,
 	BoardspaceSnapshot,
 } from "../src/types/board";
+import type { BoardspaceDocumentV2 } from "../src/files/boardspace-document";
 import {
 	formatBoardLinkCounts,
+	getBoardLinkCountsFromDocument,
 	getBoardLinkCountsFromSnapshot,
 } from "../src/tldraw/board-link-counts";
 
@@ -162,6 +164,25 @@ test("detects supported and unsupported Boardspace frontmatter versions", () => 
 	);
 });
 
+test("recomputes board-link counts from canonical items", () => {
+	const document = {
+		schemaVersion: 2,
+		frontmatterLines: [],
+		textCardOrder: [],
+		items: {
+			"link-1": { kind: "board-link" },
+			"link-2": { kind: "board-link" },
+			"text-1": { kind: "text" },
+			"table-1": { kind: "table" },
+		},
+	} as unknown as BoardspaceDocumentV2;
+
+	assert.deepEqual(getBoardLinkCountsFromDocument(document), {
+		boardCount: 2,
+		cardCount: 2,
+	});
+});
+
 test("counts board links and cards in boardspace snapshots", () => {
 	const countedSnapshot = {
 		document: {
@@ -176,6 +197,12 @@ test("counts board links and cards in boardspace snapshots", () => {
 					id: "shape:todo",
 					typeName: "shape",
 					type: "board-todo",
+					parentId: "page:page",
+				},
+				"shape:table": {
+					id: "shape:table",
+					typeName: "shape",
+					type: "board-table",
 					parentId: "page:page",
 				},
 				"shape:link": {
@@ -206,7 +233,7 @@ test("counts board links and cards in boardspace snapshots", () => {
 
 	assert.deepEqual(counts, {
 		boardCount: 1,
-		cardCount: 3,
+		cardCount: 4,
 	});
-	assert.equal(formatBoardLinkCounts(counts), "1 board, 3 cards");
+	assert.equal(formatBoardLinkCounts(counts), "1 board, 4 cards");
 });

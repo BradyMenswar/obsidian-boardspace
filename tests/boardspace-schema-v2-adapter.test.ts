@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import {
 	createSchemaV2BoardspaceDocumentAdapter,
 	createSnapshotEditorState,
+	editorStateReferencesBoardLinkTarget,
 	editorStateReferencesMediaAttachment,
+	updateBoardLinkTargetPath,
 	updateMediaAttachmentPath,
 } from "../src/files/boardspace-document-adapter";
 import {
+	BoardspaceBoardLinkCard,
 	BoardspaceColorSwatchCard,
 	BoardspaceDocumentV2,
 	BoardspaceMediaCard,
@@ -159,6 +162,32 @@ const mediaDocument: BoardspaceDocumentV2 = {
 };
 const mediaSource = serializeBoardspaceDocument(mediaDocument);
 
+const boardLinkCard: BoardspaceBoardLinkCard = {
+	id: "board-link-1",
+	kind: "board-link",
+	targetPath: "Projects/Board B.md",
+	title: "Board **B**",
+	icon: "bookmark",
+	placement: { type: "root", order: 0, position: { x: 300, y: 180 } },
+	preferredSize: { width: 210, height: 168 },
+	style: {
+		color: "grey",
+		customColor: "#6b7280",
+		dash: "solid",
+		fill: "semi",
+		opacity: 0.75,
+		size: "m",
+		topBarColor: "transparent",
+		topBarCustomColor: "#f8fafc",
+	},
+};
+const boardLinkSource = serializeBoardspaceDocument({
+	schemaVersion: 2,
+	frontmatterLines: [],
+	textCardOrder: [],
+	items: { "board-link-1": boardLinkCard },
+});
+
 const multiCardDocument: BoardspaceDocumentV2 = {
 	...populatedDocument,
 	textCardOrder: ["text-2", "text-1"],
@@ -226,6 +255,7 @@ test("round-trips one raw-Markdown text card through the complete editor represe
 		tableCards: [],
 		swatchCards: [],
 		mediaCards: [],
+		boardLinkCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), populatedSource);
 });
@@ -256,6 +286,7 @@ test("round-trips a to-do card and stable task identities through the complete e
 		tableCards: [],
 		swatchCards: [],
 		mediaCards: [],
+		boardLinkCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), todoSource);
 });
@@ -291,6 +322,7 @@ test("round-trips a table card and stable row and column identities through the 
 		}],
 		swatchCards: [],
 		mediaCards: [],
+		boardLinkCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), tableSource);
 });
@@ -317,8 +349,76 @@ test("round-trips a media card and owned plain-text caption through the complete
 			preferredSize: { width: 450, height: 300 },
 			style: { opacity: 0.9 },
 		}],
+		boardLinkCards: [],
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), mediaSource);
+});
+
+test("round-trips a board link without persisting derived counts or an editor page", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(boardLinkSource);
+
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable") return;
+	assert.deepEqual(loaded.editorState, {
+		kind: "canonical",
+		textCards: [],
+		todoCards: [],
+		tableCards: [],
+		swatchCards: [],
+		mediaCards: [],
+		boardLinkCards: [{
+			id: "board-link-1",
+			targetPath: "Projects/Board B.md",
+			title: "Board **B**",
+			icon: "bookmark",
+			order: 0,
+			position: { x: 300, y: 180 },
+			preferredSize: { width: 210, height: 168 },
+			style: boardLinkCard.style,
+		}],
+	});
+	const saved = adapter.serializeEditorState(loaded.editorState);
+	assert.equal(saved, boardLinkSource);
+	assert.doesNotMatch(saved, /boardCount|cardCount|typeName|page:/);
+});
+
+test("persists a board link from the complete editor representation while recomputing derived counts", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotBoardLink(snapshot, "board-link-1", "Projects/Board B.md", 99, 42);
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.deepEqual(reopened.document.items["board-link-1"], boardLinkCard);
+	assert.doesNotMatch(saved, /boardCount|cardCount/);
+	assert.match(saved, /## Board links\n- \[\[Projects\/Board B\]\]/);
+});
+
+test("updates board-link target paths on rename and retains the last path when a target disappears", () => {
+	const loaded = createSchemaV2BoardspaceDocumentAdapter().loadSource(boardLinkSource);
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable" || !loaded.editorState) return;
+
+	const renamed = updateBoardLinkTargetPath(loaded.editorState, "Projects/Board B.md", "Archive/Board B.md");
+	assert.equal(renamed.changed, true);
+	assert.equal(editorStateReferencesBoardLinkTarget(renamed.state, "Archive/Board B.md"), true);
+	assert.equal(renamed.state.kind, "canonical");
+	if (renamed.state.kind !== "canonical") return;
+	assert.equal(renamed.state.boardLinkCards[0]?.targetPath, "Archive/Board B.md");
+
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotBoardLink(snapshot, "board-link-1", "Projects/Board B.md", 1, 2);
+	const renamedSnapshot = updateBoardLinkTargetPath(createSnapshotEditorState(snapshot), "Projects/Board B.md", "Archive/Board B.md");
+	assert.equal(renamedSnapshot.changed, true);
+	assert.equal(editorStateReferencesBoardLinkTarget(renamedSnapshot.state, "Archive/Board B.md"), true);
+
+	// Delete events leave the canonical target untouched so the editor can show
+	// the visibly broken link at its last known path.
+	assert.equal(renamed.state.boardLinkCards[0]?.targetPath, "Archive/Board B.md");
 });
 
 test("persists image asset metadata and an optional caption as one media card", () => {
@@ -404,6 +504,7 @@ test("round-trips a color swatch using Boardspace-owned color, label, placement,
 			style: { opacity: 0.7 },
 		}],
 		mediaCards: [],
+		boardLinkCards: [],
 	});
 	const saved = adapter.serializeEditorState(loaded.editorState);
 	assert.equal(saved, swatchSource);
@@ -723,6 +824,41 @@ test("returns exact read-only diagnostics and preserves invalid source", () => {
 	});
 	assert.equal(adapter.serializeEditorState(undefined), source);
 });
+
+function addSnapshotBoardLink(
+	snapshot: BoardspaceSnapshot,
+	id: string,
+	filePath: string,
+	boardCount: number,
+	cardCount: number,
+) {
+	(snapshot.document.store as Record<string, unknown>)[`shape:${id}`] = {
+		id: `shape:${id}`,
+		typeName: "shape",
+		type: "board-link",
+		parentId: "page:page",
+		index: "a1",
+		opacity: 0.75,
+		x: 300,
+		y: 180,
+		props: {
+			boardCount,
+			cardCount,
+			color: "grey",
+			customColor: "#6b7280",
+			dash: "solid",
+			filePath,
+			fill: "semi",
+			h: 168,
+			icon: "bookmark",
+			size: "m",
+			title: "Board **B**",
+			topBarColor: "transparent",
+			topBarCustomColor: "#f8fafc",
+			w: 210,
+		},
+	};
+}
 
 function addSnapshotMediaCard(snapshot: BoardspaceSnapshot, includeCaption: boolean) {
 	const store = snapshot.document.store as Record<string, unknown>;

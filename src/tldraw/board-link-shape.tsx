@@ -33,6 +33,7 @@ import { useBoardspaceFilePath } from "context/boardspace-file-context";
 import { parseBoardspaceFile } from "files/boardspace-file";
 import {
 	createEmptyBoardspaceDocument,
+	parseBoardspaceDocument,
 	serializeBoardspaceDocument,
 } from "files/boardspace-document";
 import { isBoardspaceFile } from "files/boardspace-frontmatter";
@@ -57,6 +58,7 @@ import {
 import {
 	BoardLinkCounts,
 	formatBoardLinkCounts,
+	getBoardLinkCountsFromDocument,
 	getBoardLinkCountsFromSnapshot,
 } from "./board-link-counts";
 
@@ -334,6 +336,10 @@ function BoardLinkShapeView({ shape }: { shape: BoardLinkShape }) {
 	);
 	const isInColumn = Boolean(parentColumn);
 	const isInCollapsedColumn = Boolean(parentColumn?.props.collapsed);
+	const isTargetMissing = Boolean(
+		shape.props.filePath &&
+		!(app.vault.getAbstractFileByPath(shape.props.filePath) instanceof TFile),
+	);
 	const isDraggedBoardColumnLink =
 		dragState.draggedShapeId === shape.id && editor.isIn("select.translating");
 	const isDarkMode = useValue(
@@ -586,7 +592,11 @@ function BoardLinkShapeView({ shape }: { shape: BoardLinkShape }) {
 					type="button"
 					className="boardspace-board-link-shape__icon"
 					title={
-						shape.props.filePath ? "Open linked board" : "Choose linked board"
+						isTargetMissing
+							? "Choose a new target for missing board"
+							: shape.props.filePath
+								? "Open linked board"
+								: "Choose linked board"
 					}
 					style={{
 						...iconBlockStyles,
@@ -657,7 +667,7 @@ function BoardLinkShapeView({ shape }: { shape: BoardLinkShape }) {
 					>
 						{countsLabel}
 					</div>
-					{shape.props.filePath ? null : (
+					{shape.props.filePath && !isTargetMissing ? null : (
 						<button
 							type="button"
 							className="boardspace-board-link-shape__target"
@@ -669,7 +679,7 @@ function BoardLinkShapeView({ shape }: { shape: BoardLinkShape }) {
 								void chooseTarget();
 							}}
 						>
-							Choose board
+							{isTargetMissing ? "Missing board" : "Choose board"}
 						</button>
 					)}
 				</div>
@@ -796,7 +806,10 @@ export async function refreshBoardLinkCounts(
 
 	try {
 		const contents = await app.vault.cachedRead(file);
-		return getBoardLinkCountsFromSnapshot(parseBoardspaceFile(contents));
+		const canonical = parseBoardspaceDocument(contents);
+		return canonical.status === "editable"
+			? getBoardLinkCountsFromDocument(canonical.document)
+			: getBoardLinkCountsFromSnapshot(parseBoardspaceFile(contents));
 	} catch (error) {
 		console.error("Boardspace failed to read linked board.", error);
 		return null;

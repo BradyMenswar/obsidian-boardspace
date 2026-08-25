@@ -28,6 +28,7 @@ const DASHES = new Set(["draw", "solid", "dashed", "dotted"]);
 const FILLS = new Set(["none", "semi", "solid", "pattern", "fill", "lined-fill"]);
 const SIZES = new Set(["s", "m", "l", "xl"]);
 const SWATCH_LABELS = new Set(["none", "hex", "rgb", "hsl"]);
+const BOARD_LINK_ICONS = new Set(["board", "bookmark", "folder", "lightbulb", "layers", "sparkle"]);
 
 export interface BoardspaceTextCardStyle {
 	color: string;
@@ -133,7 +134,16 @@ export interface BoardspaceMediaCard {
 	style: { opacity: number };
 }
 
-export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard;
+export type BoardspaceBoardLinkIcon = "board" | "bookmark" | "folder" | "lightbulb" | "layers" | "sparkle";
+
+export interface BoardspaceBoardLinkCard extends BoardspaceRootCard {
+	kind: "board-link";
+	targetPath: string;
+	title: string;
+	icon: BoardspaceBoardLinkIcon;
+}
+
+export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard | BoardspaceBoardLinkCard;
 
 export interface BoardspaceDocumentV2 {
 	schemaVersion: typeof BOARDSPACE_SCHEMA_VERSION;
@@ -357,7 +367,7 @@ function validateStructuredData(
 		if (!KNOWN_ITEM_KINDS.has(item.kind)) {
 			return invalid("unknown-item-kind", `Unknown Boardspace canvas item kind: ${item.kind}.`);
 		}
-		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch" && item.kind !== "media") {
+		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch" && item.kind !== "media" && item.kind !== "board-link") {
 			return invalid("canvas-content-not-supported", `Boardspace canvas item kind ${item.kind} is not supported yet.`);
 		}
 	}
@@ -396,6 +406,13 @@ function validateStructuredData(
 		if (isRecord(rawItem) && rawItem.kind === "media") {
 			if (!isMediaCardData(key, rawItem)) {
 				return invalidData(`Boardspace media card ${key} has a malformed attachment reference, caption, metadata, placement, preferred size, or visual style.`);
+			}
+			items[key] = rawItem;
+			continue;
+		}
+		if (isRecord(rawItem) && rawItem.kind === "board-link") {
+			if (!isBoardLinkCardData(key, rawItem)) {
+				return invalidData(`Boardspace board link ${key} has a malformed target path, title, icon, placement, preferred size, or visual style.`);
 			}
 			items[key] = rawItem;
 			continue;
@@ -440,7 +457,7 @@ function validateStructuredData(
 	return { status: "valid", items, textCardOrder: [...textCardOrder] };
 }
 
-function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard {
+function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard | BoardspaceBoardLinkCard {
 	if (item.kind !== "text") return item;
 	return {
 		id: item.id,
@@ -495,19 +512,43 @@ function isMediaCardData(key: string, value: unknown): value is BoardspaceMediaC
 }
 
 function serializeIndexProjection(items: Record<string, BoardspaceCanvasItem>) {
-	const paths = Array.from(new Set(
+	const boardPaths = uniqueSortedPaths(
+		Object.values(items)
+			.filter((item): item is BoardspaceBoardLinkCard => item.kind === "board-link")
+			.map((item) => item.targetPath)
+			.filter((path) => path.length > 0),
+	);
+	const attachmentPaths = uniqueSortedPaths(
 		Object.values(items)
 			.filter((item): item is BoardspaceMediaCard => item.kind === "media")
 			.map((item) => item.attachmentPath),
-	)).sort((a, b) => a.localeCompare(b));
-	const content = paths.length > 0
-		? `\n## Attachments\n${paths.map((path) => `- ![[${escapeWikiLinkTarget(path)}]]`).join("\n")}`
-		: "";
+	);
+	const sections = [
+		boardPaths.length > 0
+			? `## Board links\n${boardPaths.map((path) => `- [[${escapeWikiLinkTarget(path.replace(/\.md$/i, ""))}]]`).join("\n")}`
+			: "",
+		attachmentPaths.length > 0
+			? `## Attachments\n${attachmentPaths.map((path) => `- ![[${escapeWikiLinkTarget(path)}]]`).join("\n")}`
+			: "",
+	].filter(Boolean);
+	const content = sections.length > 0 ? `\n${sections.join("\n\n")}` : "";
 	return `${INDEX_PROJECTION_START}${content}\n${INDEX_PROJECTION_END}`;
+}
+
+function uniqueSortedPaths(paths: string[]) {
+	return Array.from(new Set(paths)).sort();
 }
 
 function escapeWikiLinkTarget(path: string) {
 	return path.replace(/\\/g, "/").replace(/\|/g, "\\|").replace(/\]/g, "\\]");
+}
+
+function isBoardLinkCardData(key: string, value: unknown): value is BoardspaceBoardLinkCard {
+	return isRecord(value) &&
+		hasOnlyKeys(value, ["id", "kind", "targetPath", "title", "icon", "placement", "preferredSize", "style"]) &&
+		value.id === key && value.kind === "board-link" && isOptionalVaultPath(value.targetPath) &&
+		typeof value.title === "string" && typeof value.icon === "string" && BOARD_LINK_ICONS.has(value.icon) &&
+		isRootCardData(value);
 }
 
 function validateTableCard(
@@ -570,6 +611,9 @@ function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>
 		}
 		if (item.kind === "media" && !isMediaCardData(itemId, item)) {
 			throw new Error(`Media card ${itemId} has a malformed attachment reference, caption, metadata, placement, preferred size, or visual style; the complete save was blocked.`);
+		}
+		if (item.kind === "board-link" && !isBoardLinkCardData(itemId, item)) {
+			throw new Error(`Board link ${itemId} has a malformed target path, title, icon, placement, preferred size, or visual style; the complete save was blocked.`);
 		}
 		if (item.kind === "todo") {
 			for (const task of item.tasks) {
@@ -644,6 +688,10 @@ function hasOnlyOptionalKeys(value: Record<string, unknown>, allowedKeys: string
 
 function isVaultPath(value: unknown): value is string {
 	return typeof value === "string" && value.trim() === value && value.length > 0 && !value.startsWith("/") && !value.includes("\\");
+}
+
+function isOptionalVaultPath(value: unknown): value is string {
+	return value === "" || isVaultPath(value);
 }
 
 function isOpacity(value: unknown): value is number {

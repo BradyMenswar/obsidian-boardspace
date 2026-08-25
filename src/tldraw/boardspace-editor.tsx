@@ -456,9 +456,35 @@ function createCanonicalCards(
 		...state.tableCards.map((card) => ({ kind: "table" as const, card })),
 		...state.swatchCards.map((card) => ({ kind: "color-swatch" as const, card })),
 		...state.mediaCards.map((card) => ({ kind: "media" as const, card })),
+		...state.boardLinkCards.map((card) => ({ kind: "board-link" as const, card })),
 	].sort((a, b) => a.card.order - b.card.order);
 	editor.createShapes(
 		cards.map(({ kind, card }) => {
+			if (kind === "board-link") {
+				return {
+					id: `shape:${card.id}` as BoardLinkShape["id"],
+					type: "board-link" as const,
+					opacity: card.style.opacity,
+					x: card.position.x,
+					y: card.position.y,
+					props: {
+						boardCount: 0,
+						cardCount: 0,
+						color: card.style.color as BoardLinkShape["props"]["color"],
+						customColor: card.style.customColor,
+						dash: card.style.dash as BoardLinkShape["props"]["dash"],
+						filePath: card.targetPath,
+						fill: card.style.fill as BoardLinkShape["props"]["fill"],
+						h: card.preferredSize.height,
+						icon: card.icon,
+						size: card.style.size as BoardLinkShape["props"]["size"],
+						title: card.title,
+						topBarColor: card.style.topBarColor as BoardLinkShape["props"]["topBarColor"],
+						topBarCustomColor: card.style.topBarCustomColor,
+						w: card.preferredSize.width,
+					},
+				};
+			}
 			if (kind === "media") {
 				const base = {
 					id: `shape:${card.id}`,
