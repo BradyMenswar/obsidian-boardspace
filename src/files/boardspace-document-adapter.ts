@@ -1,7 +1,11 @@
 import type { TLEditorSnapshot } from "tldraw";
 import type { BoardspaceDocumentAdapter } from "./boardspace-document-lifecycle";
 import { isValidArrowBinding, readArrowShape } from "./boardspace-arrow-adapter";
-import { BOARDSPACE_PREFERRED_SIZE_META_KEY } from "./boardspace-editor-meta";
+import {
+	BOARDSPACE_CANVAS_ITEM_ID_META_KEY,
+	BOARDSPACE_PREFERRED_SIZE_META_KEY,
+	isBoardspaceEditorMeta,
+} from "./boardspace-editor-meta";
 import { readFreehandStrokeShape } from "./boardspace-freehand-stroke-adapter";
 import {
 	BoardspaceArrow,
@@ -138,11 +142,11 @@ export function getArrowVisualTargetId(
 export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAdapter<BoardspaceEditorState> {
 	let document: BoardspaceDocumentV2 | undefined;
 	let untouchedReadOnlySource = "";
-	const tableCopyIdentityRemaps = new Map<string, Map<string, string>>();
+	const copyIdentityRemaps = new Map<string, Map<string, string>>();
 
 	return {
 		loadSource(source) {
-			tableCopyIdentityRemaps.clear();
+			copyIdentityRemaps.clear();
 			const result = parseBoardspaceDocument(source);
 			if (result.status === "read-only") {
 				document = undefined;
@@ -204,8 +208,10 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			if (!editorState) {
 				return serializeBoardspaceDocument({ ...document, items: {}, textCardOrder: [] });
 			}
-			let cards = editorState.kind === "canonical"
-				? [
+			let copiedItemIds = new Set<string>();
+			let cards: BoardspaceCanvasItem[];
+			if (editorState.kind === "canonical") {
+				cards = [
 					...editorState.textCards.map(toCanonicalTextCard),
 					...editorState.todoCards.map(toCanonicalTodoCard),
 					...editorState.tableCards.map(toCanonicalTableCard),
@@ -215,9 +221,13 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 					...(editorState.columns ?? []).map(toCanonicalColumn),
 					...(editorState.freehandStrokes ?? []).map((stroke) => structuredClone(stroke)),
 					...(editorState.arrows ?? []).map((arrow) => structuredClone(arrow)),
-				]
-				: readCardsFromSnapshot(editorState.snapshot);
-			cards = renewDuplicatedTableIdentities(cards, document, tableCopyIdentityRemaps);
+				];
+			} else {
+				const snapshotResult = readCardsFromSnapshot(editorState.snapshot);
+				cards = snapshotResult.cards;
+				copiedItemIds = snapshotResult.copiedItemIds;
+			}
+			cards = renewDuplicatedNestedIdentities(cards, document, copyIdentityRemaps, copiedItemIds);
 			const items = Object.fromEntries(cards.map((card) => [card.id, card]));
 			if (Object.keys(items).length !== cards.length) {
 				throw new Error("Canvas-item identities must be unique; the complete save was blocked.");
@@ -238,27 +248,40 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 	};
 }
 
-function renewDuplicatedTableIdentities(
+function renewDuplicatedNestedIdentities(
 	cards: BoardspaceCanvasItem[],
 	loadedDocument: BoardspaceDocumentV2,
 	copyRemaps: Map<string, Map<string, string>>,
+	copiedItemIds: Set<string>,
 ) {
 	const loadedTables = Object.values(loadedDocument.items)
 		.filter((item): item is BoardspaceTableCard => item.kind === "table");
+	const loadedTodos = Object.values(loadedDocument.items)
+		.filter((item): item is BoardspaceTodoCard => item.kind === "todo");
 
 	return cards.map((card) => {
+		if (card.kind === "todo") {
+			const matches = (todo: BoardspaceTodoCard) => todo.tasks.length === card.tasks.length &&
+				todo.tasks.every((task, index) => task.id === card.tasks[index]?.id);
+			const loadedCard = loadedDocument.items[card.id];
+			if (!copiedItemIds.has(card.id) && loadedCard?.kind === "todo" && matches(loadedCard)) return card;
+			let remap = copyRemaps.get(card.id);
+			if (!remap && !copiedItemIds.has(card.id) && !loadedTodos.some(matches)) return card;
+			if (!remap) {
+				remap = new Map(card.tasks.map((task) => [task.id, createNestedIdentity("todo-task")]));
+				copyRemaps.set(card.id, remap);
+			}
+			return { ...card, tasks: card.tasks.map((task) => ({ ...task, id: remap.get(task.id)! })) };
+		}
 		if (card.kind !== "table") return card;
 		const loadedCard = loadedDocument.items[card.id];
-		const matchesNestedIdentities = (table: BoardspaceTableCard) =>
-			table.columns.length === card.columns.length &&
-			table.rows.length === card.rows.length &&
+		const matches = (table: BoardspaceTableCard) =>
+			table.columns.length === card.columns.length && table.rows.length === card.rows.length &&
 			table.columns.every((column, index) => column.id === card.columns[index]?.id) &&
 			table.rows.every((row, index) => row.id === card.rows[index]?.id);
-		if (loadedCard?.kind === "table" && matchesNestedIdentities(loadedCard)) return card;
-
+		if (!copiedItemIds.has(card.id) && loadedCard?.kind === "table" && matches(loadedCard)) return card;
 		let remap = copyRemaps.get(card.id);
-		const copiedFrom = loadedTables.find(matchesNestedIdentities);
-		if (!remap && !copiedFrom) return card;
+		if (!remap && !copiedItemIds.has(card.id) && !loadedTables.some(matches)) return card;
 		if (!remap) {
 			remap = new Map<string, string>();
 			for (const column of card.columns) remap.set(column.id, createNestedIdentity("table-column"));
@@ -269,12 +292,8 @@ function renewDuplicatedTableIdentities(
 			...card,
 			columns: card.columns.map((column) => ({ ...column, id: remap.get(column.id)! })),
 			rows: card.rows.map((row) => ({
-				...row,
-				id: remap.get(row.id)!,
-				cells: row.cells.map((cell) => ({
-					...cell,
-					columnId: remap.get(cell.columnId) ?? cell.columnId,
-				})),
+				...row, id: remap.get(row.id)!,
+				cells: row.cells.map((cell) => ({ ...cell, columnId: remap.get(cell.columnId) ?? cell.columnId })),
 			})),
 		};
 	});
@@ -534,7 +553,7 @@ function toCanonicalColumn(column: BoardspaceEditorColumn): BoardspaceColumn {
 	};
 }
 
-function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem[] {
+function readCardsFromSnapshot(snapshot: TLEditorSnapshot): { cards: BoardspaceCanvasItem[]; copiedItemIds: Set<string> } {
 	const store = snapshot.document?.store;
 	if (!isRecord(store)) {
 		throw new Error("The editor representation is malformed; the complete save was blocked.");
@@ -560,7 +579,7 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 			continue;
 		}
 		if (record.typeName === "binding" && record.type === "arrow") {
-			bindings.push(record);
+			bindings.push(structuredClone(record));
 			continue;
 		}
 		if (record.typeName !== "shape" || !["board-note", "board-todo", "board-table", "board-swatch", "board-link", "board-column", "image", "video", "arrow", "draw"].includes(String(record.type))) {
@@ -569,8 +588,24 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 		shapes.set(recordId, record);
 	}
 
+	const copiedItemIds = new Set<string>();
+	const copiedIdsByOrigin = new Map<string, string>();
+	for (const shape of shapes.values()) {
+		const actualId = String(shape.id).replace(/^shape:/, "");
+		const originId = isRecord(shape.meta) ? shape.meta[BOARDSPACE_CANVAS_ITEM_ID_META_KEY] : undefined;
+		if (typeof originId === "string" && originId !== actualId) {
+			copiedItemIds.add(actualId);
+			copiedIdsByOrigin.set(originId, actualId);
+		}
+	}
 	for (const binding of bindings) {
 		const from = shapes.get(String(binding.fromId));
+		const fromId = String(binding.fromId).replace(/^shape:/, "");
+		const targetOrigin = isRecord(binding.meta) ? binding.meta["boardspaceArrowTargetItemId"] : undefined;
+		if (copiedItemIds.has(fromId) && typeof targetOrigin === "string") {
+			const copiedTargetId = copiedIdsByOrigin.get(targetOrigin);
+			if (copiedTargetId) binding.meta = { ...binding.meta as Record<string, unknown>, boardspaceArrowTargetItemId: copiedTargetId };
+		}
 		if (!from || from.type !== "arrow" || !isValidArrowBinding(binding) || !shapes.has(String(binding.toId))) {
 			throw new Error(`Unsupported or malformed arrow binding ${String(binding.id)} blocks the complete save.`);
 		}
@@ -624,7 +659,7 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 		.filter((shape) => shape.type === "arrow" && shape.parentId !== pageId)
 		.sort((a, b) => String(a.index).localeCompare(String(b.index)));
 	nestedArrows.forEach((shape, offset) => items.push(readArrowShape(shape, rootShapes.length + offset, pageId, bindings, shapes)));
-	return items;
+	return { cards: items, copiedItemIds };
 }
 
 function readColumnShape(shape: Record<string, unknown>, order: number, pageId: string): BoardspaceColumn {
@@ -871,10 +906,8 @@ function readColorSwatchShape(
 }
 
 function isTextStyleMetaAllowed(value: unknown) {
-	if (value === undefined) return true;
-	if (!isRecord(value)) return false;
-	const keys = Object.keys(value);
-	return keys.length === 0 || keys.length === 1 && isPreferredSize(value[BOARDSPACE_PREFERRED_SIZE_META_KEY]);
+	return isBoardspaceEditorMeta(value, [BOARDSPACE_PREFERRED_SIZE_META_KEY]) &&
+		(!isRecord(value) || value[BOARDSPACE_PREFERRED_SIZE_META_KEY] === undefined || isPreferredSize(value[BOARDSPACE_PREFERRED_SIZE_META_KEY]));
 }
 
 function readPreferredSize(shape: Record<string, unknown>, width: number, height: number) {

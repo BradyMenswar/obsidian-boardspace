@@ -1,6 +1,7 @@
 import {
 	BOARDSPACE_ARROW_TARGET_META_KEY,
 } from "../files/boardspace-arrow-adapter";
+import { getBoardspaceCanvasItemMeta } from "../files/boardspace-editor-meta";
 import {
 	BoardspaceEditorState,
 	getArrowVisualTargetId,
@@ -24,6 +25,7 @@ export function createCanonicalArrows(
 	editor.createShapes(arrows.map((arrow) => ({
 		id: `shape:${arrow.id}` as TLArrowShape["id"],
 		type: "arrow" as const,
+		meta: getBoardspaceCanvasItemMeta(arrow.id),
 		parentId: editor.getCurrentPageId(),
 		index: rootIndices.get(arrow.id),
 		x: arrow.placement.position.x,

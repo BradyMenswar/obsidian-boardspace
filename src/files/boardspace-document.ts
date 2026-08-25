@@ -807,8 +807,19 @@ function validateArrowTargets(items: Record<string, BoardspaceCanvasItem>): Boar
 }
 
 function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>) {
-	const taskIds = new Set<string>();
-	const tableNestedIds = new Set<string>();
+	const itemIds = new Set<string>();
+	const nestedIdentityKinds = new Map<string, "task" | "table">();
+	for (const item of Object.values(items)) {
+		if (itemIds.has(item.id)) {
+			throw new Error(`Canvas-item identity ${item.id} appears more than once; the complete save was blocked.`);
+		}
+		itemIds.add(item.id);
+	}
+	for (const [key, item] of Object.entries(items)) {
+		if (key !== item.id) {
+			throw new Error(`Canvas-item key ${key} does not match identity ${item.id}; the complete save was blocked.`);
+		}
+	}
 	for (const item of Object.values(items)) {
 		const itemId = item.id;
 		if (item.kind === "freehand-stroke") {
@@ -835,15 +846,27 @@ function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>
 				if (task.id.trim().length === 0) {
 					throw new Error(`To-do card ${item.id} has a task with an empty identity; the complete save was blocked.`);
 				}
-				if (taskIds.has(task.id)) {
+				if (nestedIdentityKinds.get(task.id) === "task") {
 					throw new Error(`Duplicate to-do task identity ${task.id} blocks the complete save.`);
 				}
-				taskIds.add(task.id);
+				if (itemIds.has(task.id) || nestedIdentityKinds.has(task.id)) {
+					throw new Error(`Identity ${task.id} collides with another document-scoped identity; the complete save was blocked.`);
+				}
+				nestedIdentityKinds.set(task.id, "task");
 			}
 		}
 		if (item.kind === "table") {
+			const tableNestedIds = new Set(
+				Array.from(nestedIdentityKinds, ([id, kind]) => kind === "table" ? id : "").filter(Boolean),
+			);
 			const diagnostic = validateTableCard(item, tableNestedIds);
 			if (diagnostic) throw new Error(`${diagnostic.message} The complete save was blocked.`);
+			for (const nested of [...item.columns, ...item.rows]) {
+				if (itemIds.has(nested.id) || nestedIdentityKinds.has(nested.id)) {
+					throw new Error(`Identity ${nested.id} collides with another document-scoped identity; the complete save was blocked.`);
+				}
+				nestedIdentityKinds.set(nested.id, "table");
+			}
 		}
 	}
 	const placementDiagnostic = validatePlacements(items);

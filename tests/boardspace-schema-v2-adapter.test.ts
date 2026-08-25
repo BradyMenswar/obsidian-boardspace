@@ -986,6 +986,104 @@ test("duplicating a table card renews the copied card's row and column identitie
 	assert.equal(adapter.serializeEditorState(loaded.editorState), firstSaved);
 });
 
+test("duplicating a to-do card renews copied tasks without changing the source", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(todoSource);
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable" || loaded.editorState?.kind !== "canonical") return;
+	const original = loaded.editorState.todoCards[0];
+	assert.ok(original);
+	loaded.editorState.todoCards.push({ ...structuredClone(original), id: "todo-copy", order: 1 });
+
+	const saved = adapter.serializeEditorState(loaded.editorState);
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	const source = reopened.document.items["todo-1"];
+	const copy = reopened.document.items["todo-copy"];
+	assert.equal(source?.kind, "todo");
+	assert.equal(copy?.kind, "todo");
+	if (source?.kind !== "todo" || copy?.kind !== "todo") return;
+	assert.deepEqual(source.tasks, todoDocument.items["todo-1"]?.kind === "todo" ? todoDocument.items["todo-1"].tasks : []);
+	assert.notDeepEqual(copy.tasks.map((task) => task.id), source.tasks.map((task) => task.id));
+	assert.deepEqual(copy.tasks.map(({ text, checked }) => ({ text, checked })), source.tasks.map(({ text, checked }) => ({ text, checked })));
+});
+
+test("cross-document paste renews all copied identities and remaps included arrow targets", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTextCard(snapshot, "text-copy", "a1", "Copied", 40);
+	addSnapshotTodoCard(snapshot, "todo-copy", todoDocument.items["todo-1"]?.kind === "todo"
+		? todoDocument.items["todo-1"].tasks
+		: []);
+	addSnapshotTableCard(snapshot, "table-copy", tableCard.columns, tableCard.rows);
+	addSnapshotArrow(snapshot);
+	const store = snapshot.document.store as unknown as Record<string, Record<string, unknown>>;
+	store["shape:arrow-copy"] = { ...store["shape:arrow-1"]!, id: "shape:arrow-copy", index: "a4" };
+	delete store["shape:arrow-1"];
+	for (const [copyId, sourceId] of [
+		["text-copy", "text-source"],
+		["todo-copy", "todo-source"],
+		["table-copy", "table-source"],
+		["arrow-copy", "arrow-source"],
+	] as const) {
+		store[`shape:${copyId}`]!.meta = { boardspaceCanvasItemId: sourceId };
+	}
+	store["binding:arrow-copy-end"] = {
+		id: "binding:arrow-copy-end",
+		typeName: "binding",
+		type: "arrow",
+		fromId: "shape:arrow-copy",
+		toId: "shape:text-copy",
+		meta: { boardspaceArrowTargetItemId: "text-source" },
+		props: { terminal: "end", normalizedAnchor: { x: 0.5, y: 0.5 }, isExact: false, isPrecise: false, snap: "none" },
+	};
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.deepEqual(Object.keys(reopened.document.items).sort(), ["arrow-copy", "table-copy", "text-copy", "todo-copy"]);
+	const copiedTodo = reopened.document.items["todo-copy"];
+	assert.equal(copiedTodo?.kind, "todo");
+	if (copiedTodo?.kind === "todo") {
+		assert.equal(copiedTodo.tasks.length, 2);
+		assert.ok(copiedTodo.tasks.every((task) => !["task-1", "task-2"].includes(task.id)));
+	}
+	const copiedTable = reopened.document.items["table-copy"];
+	assert.equal(copiedTable?.kind, "table");
+	if (copiedTable?.kind === "table") {
+		assert.ok(copiedTable.columns.every((column) => !tableCard.columns.some((source) => source.id === column.id)));
+		assert.ok(copiedTable.rows.every((row) => !tableCard.rows.some((source) => source.id === row.id)));
+		assert.deepEqual(copiedTable.rows[0]?.cells.map((cell) => cell.columnId), copiedTable.columns.map((column) => column.id));
+	}
+	const copiedArrow = reopened.document.items["arrow-copy"];
+	assert.equal(copiedArrow?.kind, "arrow");
+	if (copiedArrow?.kind === "arrow") {
+		assert.deepEqual(copiedArrow.end, { type: "item", itemId: "text-copy", point: { x: 360, y: 108 } });
+	}
+});
+
+test("cross-document paste frees arrow endpoints whose targets were not copied", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotArrow(snapshot);
+	const arrowShape = (snapshot.document.store as unknown as Record<string, Record<string, unknown>>)["shape:arrow-1"]!;
+	arrowShape.meta = { boardspaceCanvasItemId: "arrow-source" };
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	const copiedArrow = reopened.document.items["arrow-1"];
+	assert.equal(copiedArrow?.kind, "arrow");
+	if (copiedArrow?.kind !== "arrow") return;
+	assert.deepEqual(copiedArrow.start, { type: "free", point: { x: 80, y: 100 } });
+	assert.deepEqual(copiedArrow.end, { type: "free", point: { x: 360, y: 108 } });
+});
+
 test("invalid table references and duplicate nested identities block the complete save", () => {
 	const adapter = createSchemaV2BoardspaceDocumentAdapter();
 	adapter.loadSource(tableSource);

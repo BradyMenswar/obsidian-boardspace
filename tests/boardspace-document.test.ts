@@ -419,6 +419,51 @@ test("rejects invalid table dimensions, references, and document-scoped nested i
 	}
 });
 
+test("blocks serialization when canvas and nested identities collide", () => {
+	const todo: BoardspaceTodoCard = {
+		id: "todo-a",
+		kind: "todo",
+		title: "",
+		tasks: [{ id: "task-shared", text: "First", checked: false }],
+		placement: { type: "root", order: 0, position: { x: 0, y: 0 } },
+		preferredSize: { width: 320, height: 96 },
+		style: makeTextCard("style", "", 0).style,
+	};
+	const duplicateCanvasIdentity: BoardspaceDocumentV2 = {
+		schemaVersion: 2,
+		frontmatterLines: [],
+		items: {
+			"todo-a": todo,
+			"todo-b": { ...todo, placement: { type: "root", order: 1, position: { x: 20, y: 20 } } },
+		},
+		textCardOrder: [],
+	};
+	assert.throws(
+		() => serializeBoardspaceDocument(duplicateCanvasIdentity),
+		/Canvas-item identity todo-a appears more than once.*complete save was blocked/i,
+	);
+
+	const table: BoardspaceTableCard = {
+		id: "table-a",
+		kind: "table",
+		title: "",
+		columns: [{ id: "task-shared", title: "Owner" }],
+		rows: [{ id: "row-a", cells: [{ columnId: "task-shared", value: "Ada" }] }],
+		placement: { type: "root", order: 1, position: { x: 20, y: 20 } },
+		preferredSize: { width: 320, height: 160 },
+		style: makeTextCard("style", "", 0).style,
+	};
+	assert.throws(
+		() => serializeBoardspaceDocument({
+			schemaVersion: 2,
+			frontmatterLines: [],
+			items: { "todo-a": todo, "table-a": table },
+			textCardOrder: [],
+		}),
+		/Identity task-shared collides with another document-scoped identity.*complete save was blocked/i,
+	);
+});
+
 test("rejects duplicate and empty task identities with actionable diagnostics", () => {
 	const todo: BoardspaceTodoCard = {
 		id: "todo-1",

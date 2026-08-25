@@ -4,7 +4,10 @@ import {
 	BoardspaceEditorState,
 	createSnapshotEditorState,
 } from "../files/boardspace-document-adapter";
-import { BOARDSPACE_PREFERRED_SIZE_META_KEY } from "../files/boardspace-editor-meta";
+import {
+	BOARDSPACE_PREFERRED_SIZE_META_KEY,
+	getBoardspaceCanvasItemMeta,
+} from "../files/boardspace-editor-meta";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
 	BoardspaceFileProvider,
@@ -110,16 +113,15 @@ import {
 	normalizeBoardSwatchColor,
 } from "./board-swatch-shape";
 import { BoardSwatchTool } from "./board-swatch-tool";
-import { registerBoardTableIdentityNormalization } from "./board-table-identities";
 import { BoardTableShape, BoardTableShapeUtil } from "./board-table-shape";
 import { BoardTableTool } from "./board-table-tool";
-import { registerBoardTodoIdentityNormalization } from "./board-todo-identities";
 import { BoardTodoShape, BoardTodoShapeUtil } from "./board-todo-shape";
 import { BoardTodoTool } from "./board-todo-tool";
 import {
 	createCanonicalArrows,
 	registerBoardspaceArrowBindingNormalization,
 } from "./boardspace-arrow-bindings";
+import { registerBoardspaceCopyIdentityNormalization } from "./boardspace-copy-identities";
 import {
 	BoardspaceCanvasToneProvider,
 	useBoardspaceCanvasTone,
@@ -298,9 +300,8 @@ function BoardspaceEditorInner({
 			replaceCanvasDoubleClickWithBoardNote(editor);
 		const cleanupColumnLayout = registerBoardColumnAutoLayout(editor);
 		const cleanupColumnPersistence = registerBoardColumnPersistence(editor);
+		const cleanupCopyIdentities = registerBoardspaceCopyIdentityNormalization(editor);
 		const cleanupArrowBindings = registerBoardspaceArrowBindingNormalization(editor);
-		const cleanupTodoIdentities = registerBoardTodoIdentityNormalization(editor);
-		const cleanupTableIdentities = registerBoardTableIdentityNormalization(editor);
 		const cleanupMediaCaptions =
 			registerBoardspaceMediaCaptionNormalization(editor);
 		const removeSnapshotListener = editor.store.listen(
@@ -319,9 +320,8 @@ function BoardspaceEditorInner({
 			cleanupDoubleClick?.();
 			cleanupColumnLayout?.();
 			cleanupColumnPersistence?.();
+			cleanupCopyIdentities?.();
 			cleanupArrowBindings?.();
-			cleanupTodoIdentities?.();
-			cleanupTableIdentities?.();
 			cleanupMediaCaptions?.();
 			removeSnapshotListener();
 		};
@@ -488,6 +488,7 @@ function createCanonicalCards(
 	if (columns.length > 0) {
 		editor.createShapes(columns.map((column) => ({
 			id: `shape:${column.id}` as BoardColumnShape["id"],
+			meta: getBoardspaceCanvasItemMeta(column.id),
 			type: "board-column" as const,
 			index: rootIndices.get(column.id),
 			opacity: column.style.opacity,
@@ -525,7 +526,9 @@ function createCanonicalCards(
 				index: card.columnId ? columnIndices.get(card.columnId)?.get(card.id) : rootIndices.get(card.id),
 				x: card.columnId ? 0 : card.position.x,
 				y: card.columnId ? 0 : card.position.y,
-				...(card.columnId ? { meta: { [BOARDSPACE_PREFERRED_SIZE_META_KEY]: { ...card.preferredSize } } } : {}),
+				meta: getBoardspaceCanvasItemMeta(card.id, card.columnId
+					? { [BOARDSPACE_PREFERRED_SIZE_META_KEY]: { ...card.preferredSize } }
+					: {}),
 			};
 			if (kind === "board-link") {
 				return {
@@ -646,7 +649,7 @@ function createCanonicalCards(
 					w: card.preferredSize.width,
 				},
 			};
-		}) as TLShapePartial[],
+		}) as unknown as TLShapePartial[],
 	);
 
 	const captions = state.mediaCards.flatMap((card) => card.caption === undefined ? [] : [{
@@ -674,6 +677,7 @@ function createCanonicalCards(
 	if (freehandStrokes.length > 0) {
 		editor.createShapes(freehandStrokes.map((stroke) => ({
 			id: `shape:${stroke.id}`,
+			meta: getBoardspaceCanvasItemMeta(stroke.id),
 			type: "draw" as const,
 			index: rootIndices.get(stroke.id),
 			opacity: stroke.style.opacity,
@@ -699,7 +703,7 @@ function createCanonicalCards(
 				scaleX: 1,
 				scaleY: 1,
 			},
-		})) as TLShapePartial[]);
+		})) as unknown as TLShapePartial[]);
 	}
 	createCanonicalArrows(editor, state, rootIndices);
 }

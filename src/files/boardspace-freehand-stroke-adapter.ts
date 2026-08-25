@@ -1,5 +1,6 @@
 import { b64Vecs } from "@tldraw/tlschema";
 import type { BoardspaceFreehandStroke } from "./boardspace-document";
+import { isBoardspaceEditorMeta } from "./boardspace-editor-meta";
 
 export function readFreehandStrokeShape(
 	shape: Record<string, unknown>,
@@ -13,7 +14,7 @@ export function readFreehandStrokeShape(
 	if (
 		typeof shape.id !== "string" || !shape.id.startsWith("shape:") || shape.parentId !== pageId ||
 		!isFiniteNumber(shape.x) || !isFiniteNumber(shape.y) || !isOpacity(shape.opacity) ||
-		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true || !isEmptyMeta(shape.meta) ||
+		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true || !isBoardspaceEditorMeta(shape.meta) ||
 		!isRecord(props) || !hasOnlyKeys(props, ["color", "fill", "dash", "size", "segments", "isComplete", "isClosed", "isPen", "scale", "scaleX", "scaleY"])
 	) {
 		throw new Error(`Freehand stroke ${id} is malformed; the complete save was blocked.`);
@@ -72,10 +73,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: string[]) {
 	const keys = Object.keys(value);
 	return keys.length === allowedKeys.length && keys.every((key) => allowedKeys.includes(key));
-}
-
-function isEmptyMeta(value: unknown) {
-	return value === undefined || isRecord(value) && Object.keys(value).length === 0;
 }
 
 function isFiniteNumber(value: unknown): value is number {

@@ -1,4 +1,5 @@
 import type { BoardspaceArrow, BoardspaceArrowEndpoint } from "./boardspace-document";
+import { isBoardspaceEditorMeta } from "./boardspace-editor-meta";
 
 export const BOARDSPACE_ARROW_TARGET_META_KEY = "boardspaceArrowTargetItemId";
 
@@ -14,7 +15,7 @@ export function readArrowShape(
 		typeof shape.id !== "string" || !shape.id.startsWith("shape:") ||
 		(shape.parentId !== pageId && shapes.get(String(shape.parentId))?.type !== "board-column") ||
 		!isFiniteNumber(shape.x) || !isFiniteNumber(shape.y) || shape.opacity !== 1 ||
-		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true || !isEmptyMeta(shape.meta) ||
+		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true || !isBoardspaceEditorMeta(shape.meta) ||
 		!isRecord(props) || !hasOnlyKeys(props, ["kind", "labelColor", "color", "fill", "dash", "size", "arrowheadStart", "arrowheadEnd", "font", "start", "end", "bend", "richText", "labelPosition", "scale", "elbowMidPoint"]) ||
 		(props.kind !== "arc" && props.kind !== "elbow") || !isFiniteNumber(props.bend) ||
 		!isPoint(props.start) || !isPoint(props.end) || typeof props.color !== "string" ||
@@ -110,10 +111,6 @@ function readPlainTextLabel(value: unknown) {
 function isArrowBindingMeta(value: unknown) {
 	return value === undefined || isRecord(value) && Object.keys(value).every((key) => key === BOARDSPACE_ARROW_TARGET_META_KEY) &&
 		(value[BOARDSPACE_ARROW_TARGET_META_KEY] === undefined || typeof value[BOARDSPACE_ARROW_TARGET_META_KEY] === "string");
-}
-
-function isEmptyMeta(value: unknown) {
-	return value === undefined || isRecord(value) && Object.keys(value).length === 0;
 }
 
 function isPoint(value: unknown): value is { x: number; y: number } {
