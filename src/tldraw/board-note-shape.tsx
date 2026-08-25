@@ -34,6 +34,7 @@ import {
 	snapBoardNoteWidth,
 } from "./board-note-config";
 import { BoardTextCardContent } from "./board-text-card-content";
+import { getBoardspaceDocumentHistory } from "./boardspace-document-history";
 import {
 	clearBoardColumnDrag,
 	getBoardColumnDragState,
@@ -480,15 +481,29 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 						<BoardTextCardContent
 							isEditing={isEditing}
 							markdown={markdown}
-							onChange={(nextMarkdown) => {
-								editor.updateShape({
-									id: shape.id,
-									type: shape.type,
-									props: { markdown: nextMarkdown },
-								});
+							onChange={(nextMarkdown, kind) => {
+								getBoardspaceDocumentHistory(editor).recordTextChange(
+									shape.id,
+									kind,
+									() => {
+										editor.updateShape({
+											id: shape.id,
+											type: shape.type,
+											props: { markdown: nextMarkdown },
+										});
+									},
+								);
+							}}
+							onHistoryBoundary={() => {
+								getBoardspaceDocumentHistory(editor).finishTextGroup();
 							}}
 							onKeyDown={handleKeyDown}
-							onStopEditing={() => editor.setEditingShape(null)}
+							onRedo={() => getBoardspaceDocumentHistory(editor).redo()}
+							onStopEditing={() => {
+								getBoardspaceDocumentHistory(editor).finishTextGroup();
+								editor.setEditingShape(null);
+							}}
+							onUndo={() => getBoardspaceDocumentHistory(editor).undo()}
 						/>
 					</div>
 				)}

@@ -121,6 +121,10 @@ import {
 	createCanonicalArrows,
 	registerBoardspaceArrowBindingNormalization,
 } from "./boardspace-arrow-bindings";
+import {
+	getBoardspaceDocumentHistory,
+	registerBoardspaceDocumentHistory,
+} from "./boardspace-document-history";
 import { registerBoardspaceCopyIdentityNormalization } from "./boardspace-copy-identities";
 import {
 	BoardspaceCanvasToneProvider,
@@ -186,7 +190,22 @@ const BOARDSPACE_COMPONENTS: TLComponents = {
 
 const BOARDSPACE_OVERRIDES: TLUiOverrides = {
 	actions(editor, actions, helpers) {
-		return addBoardspaceMediaCaptionActions(editor, actions, helpers);
+		const nextActions = addBoardspaceMediaCaptionActions(editor, actions, helpers);
+		return {
+			...nextActions,
+			...(nextActions.undo ? {
+				undo: {
+					...nextActions.undo,
+					onSelect: () => getBoardspaceDocumentHistory(editor).undo(),
+				},
+			} : {}),
+			...(nextActions.redo ? {
+				redo: {
+					...nextActions.redo,
+					onSelect: () => getBoardspaceDocumentHistory(editor).redo(),
+				},
+			} : {}),
+		};
 	},
 	tools(editor, tools) {
 		return pickBoardspaceTools(editor, tools);
@@ -304,6 +323,8 @@ function BoardspaceEditorInner({
 		const cleanupArrowBindings = registerBoardspaceArrowBindingNormalization(editor);
 		const cleanupMediaCaptions =
 			registerBoardspaceMediaCaptionNormalization(editor);
+		editor.clearHistory();
+		const cleanupDocumentHistory = registerBoardspaceDocumentHistory(editor);
 		const removeSnapshotListener = editor.store.listen(
 			() => {
 				onSnapshotChange?.(createSnapshotEditorState(editor.getSnapshot()));
@@ -323,6 +344,7 @@ function BoardspaceEditorInner({
 			cleanupCopyIdentities?.();
 			cleanupArrowBindings?.();
 			cleanupMediaCaptions?.();
+			cleanupDocumentHistory();
 			removeSnapshotListener();
 		};
 	};

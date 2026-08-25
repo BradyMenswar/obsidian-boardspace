@@ -1,5 +1,5 @@
 import { EditorState } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
+import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import { Component, MarkdownRenderer } from "obsidian";
 import { useEffect, useRef } from "react";
 import { useApp } from "../hooks/use-app";
@@ -8,24 +8,33 @@ import { useBoardspaceFilePath } from "../context/boardspace-file-context";
 interface BoardTextCardContentProps {
 	isEditing: boolean;
 	markdown: string;
-	onChange(markdown: string): void;
+	onChange(markdown: string, kind: "typing" | "deleting" | "command"): void;
+	onHistoryBoundary(): void;
 	onKeyDown?: (event: KeyboardEvent) => void;
+	onRedo(): void;
 	onStopEditing(): void;
+	onUndo(): void;
 }
 
 export function BoardTextCardContent({
 	isEditing,
 	markdown,
 	onChange,
+	onHistoryBoundary,
 	onKeyDown,
+	onRedo,
 	onStopEditing,
+	onUndo,
 }: BoardTextCardContentProps) {
 	return isEditing ? (
 		<CodeMirrorTextCardEditor
 			markdown={markdown}
 			onChange={onChange}
+			onHistoryBoundary={onHistoryBoundary}
 			onKeyDown={onKeyDown}
+			onRedo={onRedo}
 			onStopEditing={onStopEditing}
+			onUndo={onUndo}
 		/>
 	) : (
 		<RenderedTextCard markdown={markdown} />
@@ -58,16 +67,27 @@ function RenderedTextCard({ markdown }: { markdown: string }) {
 function CodeMirrorTextCardEditor({
 	markdown,
 	onChange,
+	onHistoryBoundary,
 	onKeyDown,
+	onRedo,
 	onStopEditing,
+	onUndo,
 }: Omit<BoardTextCardContentProps, "isEditing">) {
 	const hostRef = useRef<HTMLDivElement>(null);
+	const viewRef = useRef<EditorView | null>(null);
+	const applyingExternalChangeRef = useRef(false);
 	const onChangeRef = useRef(onChange);
+	const onHistoryBoundaryRef = useRef(onHistoryBoundary);
 	const onKeyDownRef = useRef(onKeyDown);
+	const onRedoRef = useRef(onRedo);
 	const onStopEditingRef = useRef(onStopEditing);
+	const onUndoRef = useRef(onUndo);
 	onChangeRef.current = onChange;
+	onHistoryBoundaryRef.current = onHistoryBoundary;
 	onKeyDownRef.current = onKeyDown;
+	onRedoRef.current = onRedo;
 	onStopEditingRef.current = onStopEditing;
+	onUndoRef.current = onUndo;
 
 	useEffect(() => {
 		const host = hostRef.current;
@@ -80,8 +100,18 @@ function CodeMirrorTextCardEditor({
 				extensions: [
 					EditorView.lineWrapping,
 					EditorView.updateListener.of((update) => {
+						if (applyingExternalChangeRef.current) {
+							return;
+						}
 						if (update.docChanged) {
-							onChangeRef.current(update.state.doc.toString());
+							onChangeRef.current(
+								update.state.doc.toString(),
+								getTextChangeKind(update),
+							);
+							return;
+						}
+						if (update.selectionSet) {
+							onHistoryBoundaryRef.current();
 						}
 					}),
 					EditorView.domEventHandlers({
@@ -91,6 +121,27 @@ function CodeMirrorTextCardEditor({
 						},
 					}),
 					keymap.of([
+						{
+							key: "Mod-z",
+							run: () => {
+								onUndoRef.current();
+								return true;
+							},
+						},
+						{
+							key: "Mod-Shift-z",
+							run: () => {
+								onRedoRef.current();
+								return true;
+							},
+						},
+						{
+							key: "Mod-y",
+							run: () => {
+								onRedoRef.current();
+								return true;
+							},
+						},
 						{
 							key: "Escape",
 							run: () => {
@@ -102,10 +153,31 @@ function CodeMirrorTextCardEditor({
 				],
 			}),
 		});
+		viewRef.current = view;
 		view.focus();
 
-		return () => view.destroy();
+		return () => {
+			onHistoryBoundaryRef.current();
+			viewRef.current = null;
+			view.destroy();
+		};
 	}, []);
+
+	useEffect(() => {
+		const view = viewRef.current;
+		if (!view || view.state.doc.toString() === markdown) {
+			return;
+		}
+
+		applyingExternalChangeRef.current = true;
+		try {
+			view.dispatch({
+				changes: { from: 0, to: view.state.doc.length, insert: markdown },
+			});
+		} finally {
+			applyingExternalChangeRef.current = false;
+		}
+	}, [markdown]);
 
 	return (
 		<div
@@ -114,4 +186,26 @@ function CodeMirrorTextCardEditor({
 			onPointerDown={(event) => event.stopPropagation()}
 		/>
 	);
+}
+
+function getTextChangeKind(
+	update: ViewUpdate,
+): "typing" | "deleting" | "command" {
+	const isTypedInput = update.transactions.every((transaction) =>
+		transaction.isUserEvent("input.type"),
+	);
+	let inserted = false;
+	let deleted = false;
+	update.changes.iterChanges((fromA, toA, _fromB, _toB, insertedText) => {
+		inserted ||= insertedText.length > 0;
+		deleted ||= toA > fromA;
+	});
+
+	if (isTypedInput && inserted && !deleted) {
+		return "typing";
+	}
+	if (isTypedInput && deleted && !inserted) {
+		return "deleting";
+	}
+	return "command";
 }
