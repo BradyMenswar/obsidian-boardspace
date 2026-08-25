@@ -1,4 +1,5 @@
 import { TFile } from "obsidian";
+import { b64Vecs } from "@tldraw/tlschema";
 import {
 	BoardspaceEditorState,
 	createSnapshotEditorState,
@@ -472,10 +473,12 @@ function createCanonicalCards(
 		...state.boardLinkCards,
 	];
 	const columns = state.columns ?? [];
+	const freehandStrokes = state.freehandStrokes ?? [];
 	const arrows = state.arrows ?? [];
 	const rootIndices = createCanonicalOrderIndices([
 		...columns.map((column) => ({ id: column.id, order: column.order })),
 		...allCards.filter((card) => !card.columnId).map((card) => ({ id: card.id, order: card.order })),
+		...freehandStrokes.map((stroke) => ({ id: stroke.id, order: stroke.placement.order })),
 		...arrows.map((arrow) => ({ id: arrow.id, order: arrow.placement.order })),
 	]);
 	const columnIndices = new Map(columns.map((column) => [
@@ -668,6 +671,36 @@ function createCanonicalCards(
 		},
 	}]);
 	if (captions.length > 0) editor.createShapes(captions);
+	if (freehandStrokes.length > 0) {
+		editor.createShapes(freehandStrokes.map((stroke) => ({
+			id: `shape:${stroke.id}`,
+			type: "draw" as const,
+			index: rootIndices.get(stroke.id),
+			opacity: stroke.style.opacity,
+			x: stroke.placement.position.x,
+			y: stroke.placement.position.y,
+			props: {
+				color: stroke.style.color,
+				fill: stroke.fill,
+				dash: stroke.style.dash,
+				size: stroke.style.size,
+				segments: [{
+					type: "free" as const,
+					path: b64Vecs.encodePoints(stroke.points.map((point) => ({
+						x: point.x,
+						y: point.y,
+						z: point.pressure ?? 0.5,
+					}))),
+				}],
+				isComplete: true,
+				isClosed: stroke.closed,
+				isPen: stroke.points[0]?.pressure !== undefined,
+				scale: 1,
+				scaleX: 1,
+				scaleY: 1,
+			},
+		})) as TLShapePartial[]);
+	}
 	createCanonicalArrows(editor, state, rootIndices);
 }
 

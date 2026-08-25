@@ -2,6 +2,7 @@ import type { TLEditorSnapshot } from "tldraw";
 import type { BoardspaceDocumentAdapter } from "./boardspace-document-lifecycle";
 import { isValidArrowBinding, readArrowShape } from "./boardspace-arrow-adapter";
 import { BOARDSPACE_PREFERRED_SIZE_META_KEY } from "./boardspace-editor-meta";
+import { readFreehandStrokeShape } from "./boardspace-freehand-stroke-adapter";
 import {
 	BoardspaceArrow,
 	BoardspaceArrowEndpoint,
@@ -13,6 +14,7 @@ import {
 	BoardspaceColorSwatchCard,
 	BoardspaceColorSwatchLabel,
 	BoardspaceDocumentV2,
+	BoardspaceFreehandStroke,
 	BoardspaceMediaCard,
 	BoardspaceMediaMetadata,
 	BoardspaceTableCard,
@@ -101,6 +103,7 @@ interface CanonicalEditorState {
 	swatchCards: BoardspaceEditorColorSwatchCard[];
 	mediaCards: BoardspaceEditorMediaCard[];
 	boardLinkCards: BoardspaceEditorBoardLinkCard[];
+	freehandStrokes?: BoardspaceFreehandStroke[];
 	arrows?: BoardspaceArrow[];
 	columns?: BoardspaceEditorColumn[];
 }
@@ -179,16 +182,19 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			const columns = Object.values(result.document.items)
 				.filter((item): item is BoardspaceColumn => item.kind === "column")
 				.map(toEditorColumn);
+			const freehandStrokes = Object.values(result.document.items)
+				.filter((item): item is BoardspaceFreehandStroke => item.kind === "freehand-stroke")
+				.map((stroke) => structuredClone(stroke));
 			const arrows = Object.values(result.document.items)
 				.filter((item): item is BoardspaceArrow => item.kind === "arrow")
 				.map((arrow) => structuredClone(arrow));
-			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0 && swatchCards.length === 0 && mediaCards.length === 0 && boardLinkCards.length === 0 && columns.length === 0 && arrows.length === 0;
+			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0 && swatchCards.length === 0 && mediaCards.length === 0 && boardLinkCards.length === 0 && columns.length === 0 && freehandStrokes.length === 0 && arrows.length === 0;
 			return {
 				status: "editable",
 				sourceStatus: isEmpty ? "empty" : "loaded",
 				editorState: isEmpty
 					? undefined
-					: { kind: "canonical" as const, textCards, todoCards, tableCards, swatchCards, mediaCards, boardLinkCards, ...(columns.length === 0 ? {} : { columns }), ...(arrows.length === 0 ? {} : { arrows }) },
+					: { kind: "canonical" as const, textCards, todoCards, tableCards, swatchCards, mediaCards, boardLinkCards, ...(columns.length === 0 ? {} : { columns }), ...(freehandStrokes.length === 0 ? {} : { freehandStrokes }), ...(arrows.length === 0 ? {} : { arrows }) },
 			};
 		},
 		serializeEditorState(editorState) {
@@ -207,6 +213,7 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 					...editorState.mediaCards.map(toCanonicalMediaCard),
 					...editorState.boardLinkCards.map(toCanonicalBoardLinkCard),
 					...(editorState.columns ?? []).map(toCanonicalColumn),
+					...(editorState.freehandStrokes ?? []).map((stroke) => structuredClone(stroke)),
 					...(editorState.arrows ?? []).map((arrow) => structuredClone(arrow)),
 				]
 				: readCardsFromSnapshot(editorState.snapshot);
@@ -556,7 +563,7 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 			bindings.push(record);
 			continue;
 		}
-		if (record.typeName !== "shape" || !["board-note", "board-todo", "board-table", "board-swatch", "board-link", "board-column", "image", "video", "arrow"].includes(String(record.type))) {
+		if (record.typeName !== "shape" || !["board-note", "board-todo", "board-table", "board-swatch", "board-link", "board-column", "image", "video", "arrow", "draw"].includes(String(record.type))) {
 			throw unsupportedRecord(recordId, typeof record.type === "string" ? record.type : String(record.typeName));
 		}
 		shapes.set(recordId, record);
@@ -577,7 +584,7 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 	for (const [id, shape] of shapes) {
 		if (shape.parentId === pageId) continue;
 		const isCaption = shape.type === "board-note" && isRecord(shape.meta) && shape.meta[MEDIA_CAPTION_META_KEY] === true && shapes.has(String(shape.parentId));
-		const isColumnCard = typeof shape.parentId === "string" && columnIds.has(shape.parentId) && shape.type !== "board-column" && shape.type !== "arrow";
+		const isColumnCard = typeof shape.parentId === "string" && columnIds.has(shape.parentId) && shape.type !== "board-column" && shape.type !== "arrow" && shape.type !== "draw";
 		const isNestedArrow = shape.type === "arrow" && typeof shape.parentId === "string" && columnIds.has(shape.parentId);
 		if (!isCaption && !isColumnCard && !isNestedArrow) throw unsupportedRecord(id, String(shape.type));
 	}
@@ -594,6 +601,10 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 	rootShapes.sort((a, b) => String(a.index).localeCompare(String(b.index)));
 	const items: BoardspaceCanvasItem[] = [];
 	rootShapes.forEach((shape, order) => {
+		if (shape.type === "draw") {
+			items.push(readFreehandStrokeShape(shape, order, pageId));
+			return;
+		}
 		if (shape.type === "arrow") {
 			items.push(readArrowShape(shape, order, pageId, bindings, shapes));
 			return;

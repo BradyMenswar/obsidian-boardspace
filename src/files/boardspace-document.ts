@@ -169,6 +169,29 @@ export type BoardspaceArrowEndpoint =
 
 export type BoardspaceArrowhead = "arrow" | "triangle" | "square" | "dot" | "pipe" | "diamond" | "inverted" | "bar" | "none";
 
+export interface BoardspaceFreehandStrokePoint extends BoardspacePoint {
+	pressure?: number;
+}
+
+export interface BoardspaceFreehandStroke {
+	id: string;
+	kind: "freehand-stroke";
+	placement: {
+		type: "root";
+		order: number;
+		position: BoardspacePoint;
+	};
+	points: BoardspaceFreehandStrokePoint[];
+	closed: boolean;
+	fill: string;
+	style: {
+		color: string;
+		dash: string;
+		size: string;
+		opacity: number;
+	};
+}
+
 export interface BoardspaceArrow {
 	id: string;
 	kind: "arrow";
@@ -190,7 +213,7 @@ export interface BoardspaceArrow {
 }
 
 export type BoardspaceCard = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard | BoardspaceBoardLinkCard;
-export type BoardspaceCanvasItem = BoardspaceCard | BoardspaceColumn | BoardspaceArrow;
+export type BoardspaceCanvasItem = BoardspaceCard | BoardspaceColumn | BoardspaceArrow | BoardspaceFreehandStroke;
 
 export interface BoardspaceDocumentV2 {
 	schemaVersion: typeof BOARDSPACE_SCHEMA_VERSION;
@@ -225,6 +248,8 @@ export interface BoardspaceDocumentDiagnostic {
 		| "column-placement-invalid"
 		| "arrow-target-invalid"
 		| "arrow-style-unsupported"
+		| "freehand-point-invalid"
+		| "freehand-style-unsupported"
 		| "placement-order-invalid"
 		| "markdown-block-identity-duplicate"
 		| "markdown-footnote-definition-duplicate"
@@ -418,7 +443,7 @@ function validateStructuredData(
 		if (!KNOWN_ITEM_KINDS.has(item.kind)) {
 			return invalid("unknown-item-kind", `Unknown Boardspace canvas item kind: ${item.kind}.`);
 		}
-		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch" && item.kind !== "media" && item.kind !== "board-link" && item.kind !== "column" && item.kind !== "arrow") {
+		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch" && item.kind !== "media" && item.kind !== "board-link" && item.kind !== "column" && item.kind !== "arrow" && item.kind !== "freehand-stroke") {
 			return invalid("canvas-content-not-supported", `Boardspace canvas item kind ${item.kind} is not supported yet.`);
 		}
 	}
@@ -427,6 +452,12 @@ function validateStructuredData(
 	const taskIds = new Set<string>();
 	const tableNestedIds = new Set<string>();
 	for (const [key, rawItem] of entries) {
+		if (isRecord(rawItem) && rawItem.kind === "freehand-stroke") {
+			const diagnostic = validateFreehandStrokeData(key, rawItem);
+			if (diagnostic) return { status: "invalid", diagnostic };
+			items[key] = rawItem as unknown as BoardspaceFreehandStroke;
+			continue;
+		}
 		if (isRecord(rawItem) && rawItem.kind === "arrow") {
 			if (!isArrowData(key, rawItem)) {
 				return invalid("arrow-style-unsupported", `Boardspace arrow ${key} has malformed geometry, endpoints, arrowheads, dash, color, stroke size, label, or root placement.`);
@@ -565,6 +596,33 @@ function isColumnData(key: string, value: unknown): value is BoardspaceColumn {
 		value.id === key && value.kind === "column" && typeof value.title === "string" &&
 		typeof value.collapsed === "boolean" && isPositiveNumber(value.width) &&
 		isRootPlacement(value.placement) && isTextCardStyle(value.style);
+}
+
+function validateFreehandStrokeData(key: string, value: Record<string, unknown>): BoardspaceDocumentDiagnostic | undefined {
+	if (
+		!hasOnlyKeys(value, ["id", "kind", "placement", "points", "closed", "fill", "style"]) ||
+		value.id !== key || value.kind !== "freehand-stroke" || !isRootPlacement(value.placement) ||
+		!Array.isArray(value.points) || value.points.length === 0 ||
+		!value.points.every((point) => isRecord(point) && hasOnlyOptionalKeys(point, ["x", "y", "pressure"], ["pressure"]) &&
+			isFiniteNumber(point.x) && isFiniteNumber(point.y) &&
+			(point.pressure === undefined || isFiniteNumber(point.pressure) && point.pressure >= 0 && point.pressure <= 1))
+	) {
+		return { code: "freehand-point-invalid", message: `Boardspace freehand stroke ${key} has malformed points, pressure, identity, or root placement.` };
+	}
+	const pressurePresence = value.points.map((point) => isRecord(point) && point.pressure !== undefined);
+	if (pressurePresence.some(Boolean) && !pressurePresence.every(Boolean)) {
+		return { code: "freehand-point-invalid", message: `Boardspace freehand stroke ${key} must provide pressure for every point or no points.` };
+	}
+	if (
+		typeof value.closed !== "boolean" || typeof value.fill !== "string" || !FILLS.has(value.fill) || value.fill === "fill" || value.fill === "lined-fill" ||
+		!isRecord(value.style) || !hasOnlyKeys(value.style, ["color", "dash", "size", "opacity"]) ||
+		typeof value.style.color !== "string" || !COLORS.has(value.style.color) || value.style.color === "custom" ||
+		typeof value.style.dash !== "string" || !DASHES.has(value.style.dash) ||
+		typeof value.style.size !== "string" || !SIZES.has(value.style.size) || !isOpacity(value.style.opacity)
+	) {
+		return { code: "freehand-style-unsupported", message: `Boardspace freehand stroke ${key} has unsupported closure, fill, color, dash, stroke size, or opacity.` };
+	}
+	return undefined;
 }
 
 function isArrowData(key: string, value: unknown): value is BoardspaceArrow {
@@ -753,6 +811,10 @@ function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>
 	const tableNestedIds = new Set<string>();
 	for (const item of Object.values(items)) {
 		const itemId = item.id;
+		if (item.kind === "freehand-stroke") {
+			const diagnostic = validateFreehandStrokeData(itemId, item as unknown as Record<string, unknown>);
+			if (diagnostic) throw new Error(`${diagnostic.message} The complete save was blocked.`);
+		}
 		if (item.kind === "arrow" && !isArrowData(itemId, item)) {
 			throw new Error(`Arrow ${itemId} has malformed or unsupported geometry, endpoints, arrowheads, dash, color, stroke size, label, or root placement; the complete save was blocked.`);
 		}

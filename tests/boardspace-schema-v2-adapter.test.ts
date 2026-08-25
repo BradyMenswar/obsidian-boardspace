@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { b64Vecs } from "@tldraw/tlschema";
 import {
 	createSchemaV2BoardspaceDocumentAdapter,
 	createSnapshotEditorState,
@@ -15,6 +16,7 @@ import {
 	BoardspaceColumn,
 	BoardspaceColorSwatchCard,
 	BoardspaceDocumentV2,
+	BoardspaceFreehandStroke,
 	BoardspaceMediaCard,
 	BoardspaceTableCard,
 	BoardspaceTextCard,
@@ -211,6 +213,26 @@ const boardLinkSource = serializeBoardspaceDocument({
 	items: { "board-link-1": boardLinkCard },
 });
 
+const freehandStroke: BoardspaceFreehandStroke = {
+	id: "stroke-1",
+	kind: "freehand-stroke",
+	placement: { type: "root", order: 0, position: { x: 24, y: 36 } },
+	points: [
+		{ x: 0, y: 0, pressure: 0.25 },
+		{ x: 12, y: 8, pressure: 0.5 },
+		{ x: 28, y: 4, pressure: 0.75 },
+	],
+	closed: true,
+	fill: "semi",
+	style: { color: "red", dash: "draw", size: "l", opacity: 0.65 },
+};
+const freehandSource = serializeBoardspaceDocument({
+	schemaVersion: 2,
+	frontmatterLines: [],
+	textCardOrder: [],
+	items: { "stroke-1": freehandStroke },
+});
+
 const arrow: BoardspaceArrow = {
 	id: "arrow-1",
 	kind: "arrow",
@@ -274,6 +296,80 @@ test("adapts an empty schema-v2 document without persisting editor-session state
 	const editorState = createSnapshotEditorState(emptyEditorSnapshot);
 	assert.equal(adapter.serializeEditorState(editorState), emptySource);
 	assert.doesNotMatch(adapter.serializeEditorState(editorState), /currentPageId|selectedShapeIds|isFocusMode/);
+});
+
+test("round-trips a freehand stroke without durable tldraw draw or session records", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(freehandSource);
+
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable" || loaded.editorState?.kind !== "canonical") return;
+	assert.deepEqual(loaded.editorState.freehandStrokes, [freehandStroke]);
+	const saved = adapter.serializeEditorState(loaded.editorState);
+	assert.equal(saved, freehandSource);
+	assert.doesNotMatch(saved, /typeName|type": "draw|segments|isComplete|isPen|scaleX|currentPageId/);
+});
+
+test("persists freehand points, optional pressure, closure, fill, root placement, and visual style from the editor", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotFreehandStroke(snapshot, "stroke-1", "a1", freehandStroke);
+	const pressurelessStroke: BoardspaceFreehandStroke = {
+		...freehandStroke,
+		id: "stroke-mouse",
+		placement: { type: "root", order: 1, position: { x: 80, y: 36 } },
+		points: freehandStroke.points.map(({ x, y }) => ({ x, y })),
+	};
+	addSnapshotFreehandStroke(snapshot, "stroke-mouse", "a2", pressurelessStroke);
+
+	const reopened = parseBoardspaceDocument(adapter.serializeEditorState(createSnapshotEditorState(snapshot)));
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.deepEqual(reopened.document.items["stroke-1"], freehandStroke);
+	assert.deepEqual(reopened.document.items["stroke-mouse"], pressurelessStroke);
+});
+
+test("invalid freehand points and styles block complete loading and saving with actionable diagnostics", () => {
+	for (const [source, code] of [
+		[freehandSource.replace('"pressure": 0.75', '"pressure": 2'), "freehand-point-invalid"],
+		[freehandSource.replace('"dash": "draw"', '"dash": "zigzag"'), "freehand-style-unsupported"],
+	] as const) {
+		const loaded = createSchemaV2BoardspaceDocumentAdapter().loadSource(source);
+		assert.equal(loaded.status, "read-only");
+		if (loaded.status === "read-only") {
+			assert.equal(loaded.diagnostics[0]?.code, code);
+			assert.match(loaded.diagnostics[0]?.message ?? "", /freehand stroke stroke-1/i);
+		}
+	}
+
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotFreehandStroke(snapshot, "stroke-invalid", "a1", freehandStroke, { scale: 2 });
+	assert.throws(
+		() => adapter.serializeEditorState(createSnapshotEditorState(snapshot)),
+		/freehand stroke stroke-invalid.*scale.*complete save was blocked/i,
+	);
+});
+
+test("erased stroke fragments save as valid replacement strokes with fresh identities", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(freehandSource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotFreehandStroke(snapshot, "stroke-left", "a1", { ...freehandStroke, id: "stroke-left", closed: false });
+	addSnapshotFreehandStroke(snapshot, "stroke-right", "a2", {
+		...freehandStroke,
+		id: "stroke-right",
+		closed: false,
+		placement: { type: "root", order: 1, position: { x: 60, y: 36 } },
+	});
+
+	const reopened = parseBoardspaceDocument(adapter.serializeEditorState(createSnapshotEditorState(snapshot)));
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.equal(reopened.document.items["stroke-1"], undefined);
+	assert.deepEqual(Object.keys(reopened.document.items), ["stroke-left", "stroke-right"]);
 });
 
 test("round-trips straight and curved root arrows with free and item-bound endpoints", () => {
@@ -1098,6 +1194,38 @@ test("returns exact read-only diagnostics and preserves invalid source", () => {
 	});
 	assert.equal(adapter.serializeEditorState(undefined), source);
 });
+
+function addSnapshotFreehandStroke(
+	snapshot: BoardspaceSnapshot,
+	id: string,
+	index: string,
+	stroke: BoardspaceFreehandStroke,
+	overrides: { scale?: number } = {},
+) {
+	(snapshot.document.store as Record<string, unknown>)[`shape:${id}`] = {
+		id: `shape:${id}`,
+		typeName: "shape",
+		type: "draw",
+		parentId: "page:page",
+		index,
+		opacity: stroke.style.opacity,
+		x: stroke.placement.position.x,
+		y: stroke.placement.position.y,
+		props: {
+			color: stroke.style.color,
+			fill: stroke.fill,
+			dash: stroke.style.dash,
+			size: stroke.style.size,
+			segments: [{ type: "free", path: b64Vecs.encodePoints(stroke.points.map((point) => ({ x: point.x, y: point.y, z: point.pressure ?? 0.5 }))) }],
+			isComplete: true,
+			isClosed: stroke.closed,
+			isPen: stroke.points.every((point) => point.pressure !== undefined),
+			scale: overrides.scale ?? 1,
+			scaleX: 1,
+			scaleY: 1,
+		},
+	};
+}
 
 function addSnapshotArrow(
 	snapshot: BoardspaceSnapshot,
