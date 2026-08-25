@@ -5,10 +5,12 @@ import {
 	createSnapshotEditorState,
 	editorStateReferencesBoardLinkTarget,
 	editorStateReferencesMediaAttachment,
+	getArrowVisualTargetId,
 	updateBoardLinkTargetPath,
 	updateMediaAttachmentPath,
 } from "../src/files/boardspace-document-adapter";
 import {
+	BoardspaceArrow,
 	BoardspaceBoardLinkCard,
 	BoardspaceColumn,
 	BoardspaceColorSwatchCard,
@@ -209,6 +211,27 @@ const boardLinkSource = serializeBoardspaceDocument({
 	items: { "board-link-1": boardLinkCard },
 });
 
+const arrow: BoardspaceArrow = {
+	id: "arrow-1",
+	kind: "arrow",
+	placement: { type: "root", order: 1, position: { x: 0, y: 0 } },
+	geometry: "curved",
+	bend: 48,
+	start: { type: "free", point: { x: 80, y: 100 } },
+	end: { type: "item", itemId: "text-1", point: { x: 360, y: 108 } },
+	arrowheadStart: "dot",
+	arrowheadEnd: "triangle",
+	dash: "dashed",
+	color: "blue",
+	size: "l",
+	label: "Plain **label**",
+};
+const arrowDocument: BoardspaceDocumentV2 = {
+	...populatedDocument,
+	items: { ...populatedDocument.items, "arrow-1": arrow },
+};
+const arrowSource = serializeBoardspaceDocument(arrowDocument);
+
 const multiCardDocument: BoardspaceDocumentV2 = {
 	...populatedDocument,
 	textCardOrder: ["text-2", "text-1"],
@@ -253,6 +276,133 @@ test("adapts an empty schema-v2 document without persisting editor-session state
 	assert.doesNotMatch(adapter.serializeEditorState(editorState), /currentPageId|selectedShapeIds|isFocusMode/);
 });
 
+test("round-trips straight and curved root arrows with free and item-bound endpoints", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(arrowSource);
+
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable" || loaded.editorState?.kind !== "canonical") return;
+	assert.deepEqual(loaded.editorState.arrows, [arrow]);
+	assert.equal(adapter.serializeEditorState(loaded.editorState), arrowSource);
+
+	const straightState = structuredClone(loaded.editorState);
+	assert.ok(straightState.arrows);
+	straightState.arrows[0] = {
+		...straightState.arrows[0]!,
+		geometry: "straight",
+		bend: 0,
+		start: { type: "free", point: { x: -20, y: 12 } },
+	};
+	const straightSaved = adapter.serializeEditorState(straightState);
+	const straightReopened = parseBoardspaceDocument(straightSaved);
+	assert.equal(straightReopened.status, "editable");
+	if (straightReopened.status === "editable") {
+		assert.deepEqual(straightReopened.document.items["arrow-1"], straightState.arrows[0]);
+	}
+});
+
+test("invalid arrow targets and unsupported arrow styles block complete loading and saving", () => {
+	const missingTarget = arrowSource.replace('"itemId": "text-1"', '"itemId": "missing"');
+	const invalidLoad = createSchemaV2BoardspaceDocumentAdapter().loadSource(missingTarget);
+	assert.equal(invalidLoad.status, "read-only");
+	if (invalidLoad.status === "read-only") {
+		assert.equal(invalidLoad.diagnostics[0]?.code, "arrow-target-invalid");
+		assert.match(invalidLoad.diagnostics[0]?.message ?? "", /arrow arrow-1.*missing canvas item missing/i);
+	}
+	const unsupportedStyle = createSchemaV2BoardspaceDocumentAdapter().loadSource(
+		arrowSource.replace('"dash": "dashed"', '"dash": "zigzag"'),
+	);
+	assert.equal(unsupportedStyle.status, "read-only");
+	if (unsupportedStyle.status === "read-only") {
+		assert.equal(unsupportedStyle.diagnostics[0]?.code, "arrow-style-unsupported");
+		assert.match(unsupportedStyle.diagnostics[0]?.message ?? "", /arrow arrow-1.*dash/i);
+	}
+
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotArrow(snapshot, { dash: "solid", kind: "elbow" });
+	assert.throws(
+		() => adapter.serializeEditorState(createSnapshotEditorState(snapshot)),
+		/arrow arrow-1 uses unsupported elbow geometry.*complete save was blocked/i,
+	);
+});
+
+test("persists an editor arrow binding as a canonical canvas-item endpoint", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotTextCard(snapshot, "text-1", "a0", "Target", 40);
+	addSnapshotArrow(snapshot);
+	addSnapshotArrowBinding(snapshot, "end", "text-1");
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	const savedArrow = reopened.document.items["arrow-1"];
+	assert.equal(savedArrow?.kind, "arrow");
+	if (savedArrow?.kind !== "arrow") return;
+	assert.deepEqual(savedArrow.end, { type: "item", itemId: "text-1", point: { x: 360, y: 108 } });
+	assert.equal(savedArrow.placement.order, 1);
+});
+
+test("converts a tldraw-reparented arrow back to a root canvas item", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotColumn(snapshot);
+	addSnapshotTextCard(snapshot, "text-1", "a0", "Target", 10);
+	const text = (snapshot.document.store as unknown as Record<string, Record<string, unknown>>)["shape:text-1"]!;
+	text.parentId = "shape:column-1";
+	addSnapshotArrow(snapshot);
+	const rawArrow = (snapshot.document.store as unknown as Record<string, Record<string, unknown>>)["shape:arrow-1"]!;
+	rawArrow.parentId = "shape:column-1";
+	rawArrow.x = 60;
+	rawArrow.y = 70;
+	addSnapshotArrowBinding(snapshot, "end", "text-1");
+
+	const reopened = parseBoardspaceDocument(adapter.serializeEditorState(createSnapshotEditorState(snapshot)));
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	const savedArrow = reopened.document.items["arrow-1"];
+	assert.equal(savedArrow?.kind, "arrow");
+	if (savedArrow?.kind !== "arrow") return;
+	assert.deepEqual(savedArrow.placement, { type: "root", order: 1, position: { x: 80, y: 100 } });
+});
+
+test("deleting a bound item leaves a free arrow endpoint at its last resolved canvas point", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(arrowSource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotArrow(snapshot);
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	const savedArrow = reopened.document.items["arrow-1"];
+	assert.equal(savedArrow?.kind, "arrow");
+	if (savedArrow?.kind !== "arrow") return;
+	assert.deepEqual(savedArrow.end, { type: "free", point: { x: 360, y: 108 } });
+});
+
+test("keeps a collapsed-column card binding canonical while resolving it to the column boundary", () => {
+	const collapsedArrow: BoardspaceArrow = {
+		...arrow,
+		end: { type: "item", itemId: "text-1", point: { x: 400, y: 72 } },
+	};
+	const source = serializeBoardspaceDocument({
+		...columnDocument,
+		items: { ...columnDocument.items, "arrow-1": collapsedArrow },
+	});
+	const loaded = createSchemaV2BoardspaceDocumentAdapter().loadSource(source);
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable" || loaded.editorState?.kind !== "canonical") return;
+	assert.deepEqual(loaded.editorState.arrows?.[0]?.end, collapsedArrow.end);
+	assert.equal(getArrowVisualTargetId(loaded.editorState, collapsedArrow.end as Extract<typeof collapsedArrow.end, { type: "item" }>), "column-1");
+});
+
 test("round-trips a column and derives contained-card geometry while retaining preferred size", () => {
 	const adapter = createSchemaV2BoardspaceDocumentAdapter();
 	const loaded = adapter.loadSource(columnSource);
@@ -275,7 +425,7 @@ test("round-trips a column and derives contained-card geometry while retaining p
 		order: 0,
 		position: { x: 0, y: 0 },
 		preferredSize: { width: 320, height: 96 },
-		style: populatedDocument.items["text-1"]?.style,
+		style: (populatedDocument.items["text-1"] as BoardspaceTextCard).style,
 	});
 	assert.equal(adapter.serializeEditorState(loaded.editorState), columnSource);
 	assert.doesNotMatch(columnSource, /"position"[^}]*"columnId"|renderedWidth|measuredHeight|cardCount/);
@@ -371,7 +521,7 @@ test("round-trips one raw-Markdown text card through the complete editor represe
 				order: 0,
 				preferredSize: { width: 320, height: 96 },
 				position: { x: 40, y: 60 },
-				style: populatedDocument.items["text-1"]?.style,
+				style: (populatedDocument.items["text-1"] as BoardspaceTextCard).style,
 			},
 		],
 		todoCards: [],
@@ -398,7 +548,7 @@ test("round-trips a to-do card and stable task identities through the complete e
 				order: 0,
 				position: { x: 80, y: 120 },
 				preferredSize: { width: 360, height: 148 },
-				style: todoDocument.items["todo-1"]?.style,
+				style: todoDocument.items["todo-1"]?.kind === "todo" ? todoDocument.items["todo-1"].style : undefined,
 				tasks: [
 					{ id: "task-1", text: "Ship **without Markdown**", checked: false },
 					{ id: "task-2", text: "Tell the team", checked: true },
@@ -904,15 +1054,15 @@ test("unsupported editor content blocks the complete text-card save", () => {
 	const adapter = createSchemaV2BoardspaceDocumentAdapter();
 	adapter.loadSource(populatedSource);
 	const unsupportedSnapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
-	(unsupportedSnapshot.document.store as Record<string, unknown>)["shape:arrow"] = {
-		id: "shape:arrow",
+	(unsupportedSnapshot.document.store as Record<string, unknown>)["shape:geo"] = {
+		id: "shape:geo",
 		typeName: "shape",
-		type: "arrow",
+		type: "geo",
 	};
 
 	assert.throws(
 		() => adapter.serializeEditorState(createSnapshotEditorState(unsupportedSnapshot)),
-		/Unsupported editor record shape:arrow \(arrow\) blocks the complete save/,
+		/Unsupported editor record shape:geo \(geo\) blocks the complete save/,
 	);
 });
 
@@ -948,6 +1098,45 @@ test("returns exact read-only diagnostics and preserves invalid source", () => {
 	});
 	assert.equal(adapter.serializeEditorState(undefined), source);
 });
+
+function addSnapshotArrow(
+	snapshot: BoardspaceSnapshot,
+	overrides: { dash?: string; kind?: string } = {},
+) {
+	(snapshot.document.store as Record<string, unknown>)["shape:arrow-1"] = {
+		id: "shape:arrow-1", typeName: "shape", type: "arrow", parentId: "page:page", index: "a1",
+		opacity: 1, x: 80, y: 100,
+		props: {
+			kind: overrides.kind ?? "arc", labelColor: "blue", color: "blue", fill: "none",
+			dash: overrides.dash ?? "dashed", size: "l", arrowheadStart: "dot", arrowheadEnd: "triangle",
+			font: "draw", start: { x: 0, y: 0 }, end: { x: 280, y: 8 }, bend: 48,
+			richText: { type: "doc", content: [{ type: "paragraph", content: [{ type: "text", text: "Plain **label**" }] }] },
+			labelPosition: 0.5, scale: 1, elbowMidPoint: 0.5,
+		},
+	};
+}
+
+function addSnapshotArrowBinding(
+	snapshot: BoardspaceSnapshot,
+	terminal: "start" | "end",
+	targetId: string,
+) {
+	(snapshot.document.store as Record<string, unknown>)[`binding:arrow-1-${terminal}`] = {
+		id: `binding:arrow-1-${terminal}`,
+		typeName: "binding",
+		type: "arrow",
+		fromId: "shape:arrow-1",
+		toId: `shape:${targetId}`,
+		meta: {},
+		props: {
+			terminal,
+			normalizedAnchor: { x: 0.5, y: 0.5 },
+			isExact: false,
+			isPrecise: false,
+			snap: "none",
+		},
+	};
+}
 
 function addSnapshotColumn(snapshot: BoardspaceSnapshot) {
 	(snapshot.document.store as Record<string, unknown>)["shape:column-1"] = {

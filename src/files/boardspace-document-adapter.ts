@@ -2,6 +2,8 @@ import type { TLEditorSnapshot } from "tldraw";
 import type { BoardspaceDocumentAdapter } from "./boardspace-document-lifecycle";
 import { BOARDSPACE_PREFERRED_SIZE_META_KEY } from "./boardspace-editor-meta";
 import {
+	BoardspaceArrow,
+	BoardspaceArrowEndpoint,
 	BoardspaceBoardLinkCard,
 	BoardspaceBoardLinkIcon,
 	BoardspaceCanvasItem,
@@ -98,6 +100,7 @@ interface CanonicalEditorState {
 	swatchCards: BoardspaceEditorColorSwatchCard[];
 	mediaCards: BoardspaceEditorMediaCard[];
 	boardLinkCards: BoardspaceEditorBoardLinkCard[];
+	arrows?: BoardspaceArrow[];
 	columns?: BoardspaceEditorColumn[];
 }
 
@@ -105,9 +108,28 @@ export type BoardspaceEditorState = CanonicalEditorState | { kind: "snapshot"; s
 
 const VAULT_PATH_META_KEY = "boardspaceVaultPath";
 const MEDIA_CAPTION_META_KEY = "boardspaceMediaCaption";
+export const BOARDSPACE_ARROW_TARGET_META_KEY = "boardspaceArrowTargetItemId";
 
 export function createSnapshotEditorState(snapshot: TLEditorSnapshot): BoardspaceEditorState {
 	return { kind: "snapshot", snapshot };
+}
+
+export function getArrowVisualTargetId(
+	state: Extract<BoardspaceEditorState, { kind: "canonical" }>,
+	endpoint: Extract<BoardspaceArrowEndpoint, { type: "item" }>,
+) {
+	const card = [
+		...state.textCards,
+		...state.todoCards,
+		...state.tableCards,
+		...state.swatchCards,
+		...state.mediaCards,
+		...state.boardLinkCards,
+	].find((candidate) => candidate.id === endpoint.itemId);
+	if (!card?.columnId) return endpoint.itemId;
+	return state.columns?.find((column) => column.id === card.columnId)?.collapsed
+		? card.columnId
+		: endpoint.itemId;
 }
 
 export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAdapter<BoardspaceEditorState> {
@@ -157,13 +179,16 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 			const columns = Object.values(result.document.items)
 				.filter((item): item is BoardspaceColumn => item.kind === "column")
 				.map(toEditorColumn);
-			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0 && swatchCards.length === 0 && mediaCards.length === 0 && boardLinkCards.length === 0 && columns.length === 0;
+			const arrows = Object.values(result.document.items)
+				.filter((item): item is BoardspaceArrow => item.kind === "arrow")
+				.map((arrow) => structuredClone(arrow));
+			const isEmpty = textCards.length === 0 && todoCards.length === 0 && tableCards.length === 0 && swatchCards.length === 0 && mediaCards.length === 0 && boardLinkCards.length === 0 && columns.length === 0 && arrows.length === 0;
 			return {
 				status: "editable",
 				sourceStatus: isEmpty ? "empty" : "loaded",
 				editorState: isEmpty
 					? undefined
-					: { kind: "canonical" as const, textCards, todoCards, tableCards, swatchCards, mediaCards, boardLinkCards, ...(columns.length === 0 ? {} : { columns }) },
+					: { kind: "canonical" as const, textCards, todoCards, tableCards, swatchCards, mediaCards, boardLinkCards, ...(columns.length === 0 ? {} : { columns }), ...(arrows.length === 0 ? {} : { arrows }) },
 			};
 		},
 		serializeEditorState(editorState) {
@@ -182,6 +207,7 @@ export function createSchemaV2BoardspaceDocumentAdapter(): BoardspaceDocumentAda
 					...editorState.mediaCards.map(toCanonicalMediaCard),
 					...editorState.boardLinkCards.map(toCanonicalBoardLinkCard),
 					...(editorState.columns ?? []).map(toCanonicalColumn),
+					...(editorState.arrows ?? []).map((arrow) => structuredClone(arrow)),
 				]
 				: readCardsFromSnapshot(editorState.snapshot);
 			cards = renewDuplicatedTableIdentities(cards, document, tableCopyIdentityRemaps);
@@ -509,6 +535,7 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 
 	const shapes = new Map<string, Record<string, unknown>>();
 	const assets = new Map<string, Record<string, unknown>>();
+	const bindings: Record<string, unknown>[] = [];
 	const pageIds: string[] = [];
 	let documentCount = 0;
 	for (const [recordId, record] of Object.entries(store)) {
@@ -525,12 +552,22 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 			assets.set(recordId, record);
 			continue;
 		}
-		if (record.typeName !== "shape" || !["board-note", "board-todo", "board-table", "board-swatch", "board-link", "board-column", "image", "video"].includes(String(record.type))) {
+		if (record.typeName === "binding" && record.type === "arrow") {
+			bindings.push(record);
+			continue;
+		}
+		if (record.typeName !== "shape" || !["board-note", "board-todo", "board-table", "board-swatch", "board-link", "board-column", "image", "video", "arrow"].includes(String(record.type))) {
 			throw unsupportedRecord(recordId, typeof record.type === "string" ? record.type : String(record.typeName));
 		}
 		shapes.set(recordId, record);
 	}
 
+	for (const binding of bindings) {
+		const from = shapes.get(String(binding.fromId));
+		if (!from || from.type !== "arrow" || !isValidArrowBinding(binding) || !shapes.has(String(binding.toId))) {
+			throw new Error(`Unsupported or malformed arrow binding ${String(binding.id)} blocks the complete save.`);
+		}
+	}
 	if (documentCount !== 1 || pageIds.length !== 1) {
 		throw new Error("A Boardspace editor representation must contain one document and one editor page; the complete save was blocked.");
 	}
@@ -540,8 +577,9 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 	for (const [id, shape] of shapes) {
 		if (shape.parentId === pageId) continue;
 		const isCaption = shape.type === "board-note" && isRecord(shape.meta) && shape.meta[MEDIA_CAPTION_META_KEY] === true && shapes.has(String(shape.parentId));
-		const isColumnCard = typeof shape.parentId === "string" && columnIds.has(shape.parentId) && shape.type !== "board-column";
-		if (!isCaption && !isColumnCard) throw unsupportedRecord(id, String(shape.type));
+		const isColumnCard = typeof shape.parentId === "string" && columnIds.has(shape.parentId) && shape.type !== "board-column" && shape.type !== "arrow";
+		const isNestedArrow = shape.type === "arrow" && typeof shape.parentId === "string" && columnIds.has(shape.parentId);
+		if (!isCaption && !isColumnCard && !isNestedArrow) throw unsupportedRecord(id, String(shape.type));
 	}
 
 	const readCard = (shape: Record<string, unknown>, placement: BoardspaceCardPlacement) => {
@@ -556,18 +594,134 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): BoardspaceCanvasItem
 	rootShapes.sort((a, b) => String(a.index).localeCompare(String(b.index)));
 	const items: BoardspaceCanvasItem[] = [];
 	rootShapes.forEach((shape, order) => {
+		if (shape.type === "arrow") {
+			items.push(readArrowShape(shape, order, pageId, bindings, shapes));
+			return;
+		}
 		if (shape.type === "board-column") {
 			const column = readColumnShape(shape, order, pageId);
 			items.push(column);
 			Array.from(shapes.values())
-				.filter((child) => child.parentId === shape.id)
+				.filter((child) => child.parentId === shape.id && child.type !== "arrow")
 				.sort((a, b) => String(a.index).localeCompare(String(b.index)))
 				.forEach((child, childOrder) => items.push(readCard(child, { type: "column", columnId: column.id, order: childOrder })));
 			return;
 		}
 		items.push(readCard(shape, { type: "root", order, position: { x: Number(shape.x), y: Number(shape.y) } }));
 	});
+	const nestedArrows = Array.from(shapes.values())
+		.filter((shape) => shape.type === "arrow" && shape.parentId !== pageId)
+		.sort((a, b) => String(a.index).localeCompare(String(b.index)));
+	nestedArrows.forEach((shape, offset) => items.push(readArrowShape(shape, rootShapes.length + offset, pageId, bindings, shapes)));
 	return items;
+}
+
+function readArrowShape(
+	shape: Record<string, unknown>,
+	order: number,
+	pageId: string,
+	bindings: Record<string, unknown>[],
+	shapes: Map<string, Record<string, unknown>>,
+): BoardspaceArrow {
+	const props = shape.props;
+	if (
+		typeof shape.id !== "string" || !shape.id.startsWith("shape:") ||
+		(shape.parentId !== pageId && shapes.get(String(shape.parentId))?.type !== "board-column") ||
+		!isFiniteNumber(shape.x) || !isFiniteNumber(shape.y) || shape.opacity !== 1 ||
+		(shape.rotation !== undefined && shape.rotation !== 0) || shape.isLocked === true || !isEmptyMeta(shape.meta) ||
+		!isRecord(props) || !hasOnlyKeys(props, ["kind", "labelColor", "color", "fill", "dash", "size", "arrowheadStart", "arrowheadEnd", "font", "start", "end", "bend", "richText", "labelPosition", "scale", "elbowMidPoint"]) ||
+		(props.kind !== "arc" && props.kind !== "elbow") || !isFiniteNumber(props.bend) ||
+		!isPoint(props.start) || !isPoint(props.end) || typeof props.color !== "string" ||
+		typeof props.dash !== "string" || typeof props.size !== "string" ||
+		typeof props.arrowheadStart !== "string" || typeof props.arrowheadEnd !== "string"
+	) throw new Error("An arrow editor record is malformed; the complete save was blocked.");
+	if (props.kind === "elbow") throw new Error(`Arrow ${shape.id.slice(6)} uses unsupported elbow geometry; the complete save was blocked.`);
+	if (props.fill !== "none" || props.font !== "draw" || props.labelColor !== props.color || props.scale !== 1 || props.labelPosition !== 0.5) {
+		throw new Error(`Arrow ${shape.id.slice(6)} uses unsupported visual or label styles; the complete save was blocked.`);
+	}
+	const arrowId = shape.id;
+	const pagePosition = getShapePagePosition(shape, pageId, shapes);
+	const label = readPlainTextLabel(props.richText);
+	const arrowBindings = bindings.filter((binding) => binding.fromId === arrowId);
+	if (arrowBindings.length > 2) throw new Error(`Arrow ${shape.id.slice(6)} has duplicate endpoint bindings; the complete save was blocked.`);
+	const pointFor = (terminal: "start" | "end") => {
+		const local = props[terminal] as { x: number; y: number };
+		return { x: pagePosition.x + local.x, y: pagePosition.y + local.y };
+	};
+	const endpointFor = (terminal: "start" | "end"): BoardspaceArrowEndpoint => {
+		const point = pointFor(terminal);
+		const binding = arrowBindings.find((candidate) => isRecord(candidate.props) && candidate.props.terminal === terminal);
+		if (!binding) return { type: "free", point };
+		if (!isValidArrowBinding(binding)) throw new Error(`Arrow ${arrowId.slice(6)} has a malformed ${terminal} binding; the complete save was blocked.`);
+		const metaTarget = isRecord(binding.meta) ? binding.meta[BOARDSPACE_ARROW_TARGET_META_KEY] : undefined;
+		const targetShapeId = typeof metaTarget === "string" ? `shape:${metaTarget}` : binding.toId;
+		const target = shapes.get(String(targetShapeId));
+		if (!target || target.type === "arrow") return { type: "free", point };
+		return { type: "item", itemId: String(targetShapeId).replace(/^shape:/, ""), point };
+	};
+	return {
+		id: shape.id.slice("shape:".length), kind: "arrow",
+		placement: { type: "root", order, position: pagePosition },
+		geometry: props.bend === 0 ? "straight" : "curved", bend: props.bend,
+		start: endpointFor("start"), end: endpointFor("end"),
+		arrowheadStart: props.arrowheadStart as BoardspaceArrow["arrowheadStart"],
+		arrowheadEnd: props.arrowheadEnd as BoardspaceArrow["arrowheadEnd"],
+		dash: props.dash, color: props.color, size: props.size,
+		...(label === "" ? {} : { label }),
+	};
+}
+
+function getShapePagePosition(
+	shape: Record<string, unknown>,
+	pageId: string,
+	shapes: Map<string, Record<string, unknown>>,
+) {
+	let x = shape.x as number;
+	let y = shape.y as number;
+	let parentId = shape.parentId;
+	const visited = new Set<string>();
+	while (typeof parentId === "string" && parentId !== pageId) {
+		if (visited.has(parentId)) throw new Error("An arrow has a cyclic parent chain; the complete save was blocked.");
+		visited.add(parentId);
+		const parent = shapes.get(parentId);
+		if (!parent || !isFiniteNumber(parent.x) || !isFiniteNumber(parent.y)) {
+			throw new Error("An arrow parent is malformed; the complete save was blocked.");
+		}
+		x += parent.x;
+		y += parent.y;
+		parentId = parent.parentId;
+	}
+	return { x, y };
+}
+
+function isValidArrowBinding(binding: Record<string, unknown>) {
+	return typeof binding.toId === "string" && isArrowBindingMeta(binding.meta) && isRecord(binding.props) &&
+		hasOnlyKeys(binding.props, ["terminal", "normalizedAnchor", "isExact", "isPrecise", "snap"]) &&
+		(binding.props.terminal === "start" || binding.props.terminal === "end") && isPoint(binding.props.normalizedAnchor) &&
+		typeof binding.props.isExact === "boolean" && typeof binding.props.isPrecise === "boolean" &&
+		["center", "edge-point", "edge", "none"].includes(String(binding.props.snap));
+}
+
+function isArrowBindingMeta(value: unknown) {
+	return value === undefined || isRecord(value) && Object.keys(value).every((key) => key === BOARDSPACE_ARROW_TARGET_META_KEY) &&
+		(value[BOARDSPACE_ARROW_TARGET_META_KEY] === undefined || typeof value[BOARDSPACE_ARROW_TARGET_META_KEY] === "string");
+}
+
+function readPlainTextLabel(value: unknown) {
+	if (!isRecord(value) || !hasOnlyOptionalKeys(value, ["type", "content"], ["content"]) || value.type !== "doc" || (value.content !== undefined && !Array.isArray(value.content))) {
+		throw new Error("An arrow label is malformed; the complete save was blocked.");
+	}
+	return (value.content ?? []).map((paragraph) => {
+		if (!isRecord(paragraph) || !hasOnlyOptionalKeys(paragraph, ["type", "content"], ["content"]) || paragraph.type !== "paragraph" || (paragraph.content !== undefined && !Array.isArray(paragraph.content))) {
+			throw new Error("Arrow labels must be plain text; the complete save was blocked.");
+		}
+		return (paragraph.content ?? []).map((node) => {
+			if (!isRecord(node) || !hasOnlyKeys(node, ["type", "text"]) || node.type !== "text" || typeof node.text !== "string") {
+				throw new Error("Arrow labels must be plain text; the complete save was blocked.");
+			}
+			return node.text;
+		}).join("");
+	}).join("\n");
 }
 
 function readColumnShape(shape: Record<string, unknown>, order: number, pageId: string): BoardspaceColumn {
@@ -888,6 +1042,14 @@ function hasOnlyKeys(value: Record<string, unknown>, allowedKeys: string[]) {
 function hasOnlyOptionalKeys(value: Record<string, unknown>, allowedKeys: string[], optionalKeys: string[]) {
 	const keys = Object.keys(value);
 	return keys.every((key) => allowedKeys.includes(key)) && allowedKeys.every((key) => optionalKeys.includes(key) || keys.includes(key));
+}
+
+function isEmptyMeta(value: unknown) {
+	return value === undefined || isRecord(value) && Object.keys(value).length === 0;
+}
+
+function isPoint(value: unknown): value is { x: number; y: number } {
+	return isRecord(value) && hasOnlyKeys(value, ["x", "y"]) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
 }
 
 function isHexColor(value: unknown): value is string {

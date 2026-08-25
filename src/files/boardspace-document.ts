@@ -29,6 +29,7 @@ const FILLS = new Set(["none", "semi", "solid", "pattern", "fill", "lined-fill"]
 const SIZES = new Set(["s", "m", "l", "xl"]);
 const SWATCH_LABELS = new Set(["none", "hex", "rgb", "hsl"]);
 const BOARD_LINK_ICONS = new Set(["board", "bookmark", "folder", "lightbulb", "layers", "sparkle"]);
+const ARROWHEADS = new Set(["arrow", "triangle", "square", "dot", "pipe", "diamond", "inverted", "bar", "none"]);
 
 export interface BoardspaceTextCardStyle {
 	color: string;
@@ -157,8 +158,39 @@ export interface BoardspaceColumn {
 	style: BoardspaceTextCardStyle;
 }
 
+export interface BoardspacePoint {
+	x: number;
+	y: number;
+}
+
+export type BoardspaceArrowEndpoint =
+	| { type: "free"; point: BoardspacePoint }
+	| { type: "item"; itemId: string; point: BoardspacePoint };
+
+export type BoardspaceArrowhead = "arrow" | "triangle" | "square" | "dot" | "pipe" | "diamond" | "inverted" | "bar" | "none";
+
+export interface BoardspaceArrow {
+	id: string;
+	kind: "arrow";
+	placement: {
+		type: "root";
+		order: number;
+		position: BoardspacePoint;
+	};
+	geometry: "straight" | "curved";
+	bend: number;
+	start: BoardspaceArrowEndpoint;
+	end: BoardspaceArrowEndpoint;
+	arrowheadStart: BoardspaceArrowhead;
+	arrowheadEnd: BoardspaceArrowhead;
+	dash: string;
+	color: string;
+	size: string;
+	label?: string;
+}
+
 export type BoardspaceCard = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard | BoardspaceBoardLinkCard;
-export type BoardspaceCanvasItem = BoardspaceCard | BoardspaceColumn;
+export type BoardspaceCanvasItem = BoardspaceCard | BoardspaceColumn | BoardspaceArrow;
 
 export interface BoardspaceDocumentV2 {
 	schemaVersion: typeof BOARDSPACE_SCHEMA_VERSION;
@@ -191,6 +223,8 @@ export interface BoardspaceDocumentDiagnostic {
 		| "table-cell-reference-invalid"
 		| "table-dimensions-invalid"
 		| "column-placement-invalid"
+		| "arrow-target-invalid"
+		| "arrow-style-unsupported"
 		| "placement-order-invalid"
 		| "markdown-block-identity-duplicate"
 		| "markdown-footnote-definition-duplicate"
@@ -384,7 +418,7 @@ function validateStructuredData(
 		if (!KNOWN_ITEM_KINDS.has(item.kind)) {
 			return invalid("unknown-item-kind", `Unknown Boardspace canvas item kind: ${item.kind}.`);
 		}
-		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch" && item.kind !== "media" && item.kind !== "board-link" && item.kind !== "column") {
+		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch" && item.kind !== "media" && item.kind !== "board-link" && item.kind !== "column" && item.kind !== "arrow") {
 			return invalid("canvas-content-not-supported", `Boardspace canvas item kind ${item.kind} is not supported yet.`);
 		}
 	}
@@ -393,6 +427,13 @@ function validateStructuredData(
 	const taskIds = new Set<string>();
 	const tableNestedIds = new Set<string>();
 	for (const [key, rawItem] of entries) {
+		if (isRecord(rawItem) && rawItem.kind === "arrow") {
+			if (!isArrowData(key, rawItem)) {
+				return invalid("arrow-style-unsupported", `Boardspace arrow ${key} has malformed geometry, endpoints, arrowheads, dash, color, stroke size, label, or root placement.`);
+			}
+			items[key] = rawItem;
+			continue;
+		}
 		if (isRecord(rawItem) && rawItem.kind === "column") {
 			if (!isColumnData(key, rawItem)) {
 				return invalidData(`Boardspace column ${key} is malformed.`);
@@ -458,6 +499,8 @@ function validateStructuredData(
 
 	const placementDiagnostic = validatePlacements(items);
 	if (placementDiagnostic) return { status: "invalid", diagnostic: placementDiagnostic };
+	const arrowTargetDiagnostic = validateArrowTargets(items);
+	if (arrowTargetDiagnostic) return { status: "invalid", diagnostic: arrowTargetDiagnostic };
 
 	for (const id of regions.keys()) {
 		if (items[id]?.kind !== "text") {
@@ -522,6 +565,34 @@ function isColumnData(key: string, value: unknown): value is BoardspaceColumn {
 		value.id === key && value.kind === "column" && typeof value.title === "string" &&
 		typeof value.collapsed === "boolean" && isPositiveNumber(value.width) &&
 		isRootPlacement(value.placement) && isTextCardStyle(value.style);
+}
+
+function isArrowData(key: string, value: unknown): value is BoardspaceArrow {
+	if (!isRecord(value) || !hasOnlyOptionalKeys(
+		value,
+		["id", "kind", "placement", "geometry", "bend", "start", "end", "arrowheadStart", "arrowheadEnd", "dash", "color", "size", "label"],
+		["label"],
+	)) return false;
+	return value.id === key && value.kind === "arrow" && isRootPlacement(value.placement) &&
+		(value.geometry === "straight" && value.bend === 0 || value.geometry === "curved" && isFiniteNumber(value.bend) && value.bend !== 0) &&
+		isArrowEndpoint(value.start) && isArrowEndpoint(value.end) &&
+		typeof value.arrowheadStart === "string" && ARROWHEADS.has(value.arrowheadStart) &&
+		typeof value.arrowheadEnd === "string" && ARROWHEADS.has(value.arrowheadEnd) &&
+		typeof value.dash === "string" && DASHES.has(value.dash) &&
+		typeof value.color === "string" && COLORS.has(value.color) && value.color !== "custom" &&
+		typeof value.size === "string" && SIZES.has(value.size) &&
+		(value.label === undefined || typeof value.label === "string");
+}
+
+function isArrowEndpoint(value: unknown): value is BoardspaceArrowEndpoint {
+	return isRecord(value) && (
+		hasOnlyKeys(value, ["type", "point"]) && value.type === "free" && isPoint(value.point) ||
+		hasOnlyKeys(value, ["type", "itemId", "point"]) && value.type === "item" && typeof value.itemId === "string" && value.itemId.length > 0 && isPoint(value.point)
+	);
+}
+
+function isPoint(value: unknown): value is BoardspacePoint {
+	return isRecord(value) && hasOnlyKeys(value, ["x", "y"]) && isFiniteNumber(value.x) && isFiniteNumber(value.y);
 }
 
 function isColorSwatchCardData(key: string, value: unknown): value is BoardspaceColorSwatchCard {
@@ -663,11 +734,28 @@ function validatePlacements(items: Record<string, BoardspaceCanvasItem>): Boards
 	return undefined;
 }
 
+function validateArrowTargets(items: Record<string, BoardspaceCanvasItem>): BoardspaceDocumentDiagnostic | undefined {
+	for (const arrow of Object.values(items)) {
+		if (arrow.kind !== "arrow") continue;
+		for (const endpoint of [arrow.start, arrow.end]) {
+			if (endpoint.type !== "item") continue;
+			const target = items[endpoint.itemId];
+			if (!target || target.kind === "arrow") {
+				return { code: "arrow-target-invalid", message: `Boardspace arrow ${arrow.id} references missing canvas item ${endpoint.itemId}.` };
+			}
+		}
+	}
+	return undefined;
+}
+
 function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>) {
 	const taskIds = new Set<string>();
 	const tableNestedIds = new Set<string>();
 	for (const item of Object.values(items)) {
 		const itemId = item.id;
+		if (item.kind === "arrow" && !isArrowData(itemId, item)) {
+			throw new Error(`Arrow ${itemId} has malformed or unsupported geometry, endpoints, arrowheads, dash, color, stroke size, label, or root placement; the complete save was blocked.`);
+		}
 		if (item.kind === "column" && !isColumnData(itemId, item)) {
 			throw new Error(`Column ${itemId} is malformed; the complete save was blocked.`);
 		}
@@ -698,6 +786,8 @@ function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>
 	}
 	const placementDiagnostic = validatePlacements(items);
 	if (placementDiagnostic) throw new Error(`${placementDiagnostic.message} The complete save was blocked.`);
+	const arrowTargetDiagnostic = validateArrowTargets(items);
+	if (arrowTargetDiagnostic) throw new Error(`${arrowTargetDiagnostic.message} The complete save was blocked.`);
 }
 
 function parseReservedFrontmatter(rawFrontmatter: string):
