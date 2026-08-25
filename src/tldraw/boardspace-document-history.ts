@@ -2,6 +2,34 @@ import type { Editor } from "tldraw";
 
 export type BoardspaceTextChangeKind = "typing" | "deleting" | "command";
 
+export function classifyBoardspaceTextChange(
+	userEvents: readonly string[],
+	inserted: boolean,
+	deleted: boolean,
+): BoardspaceTextChangeKind {
+	const everyEventMatches = (event: string) =>
+		userEvents.length > 0 &&
+		userEvents.every((value) => value === event || value.startsWith(`${event}.`));
+
+	if (inserted && !deleted && everyEventMatches("input.type")) {
+		return "typing";
+	}
+	if (
+		deleted &&
+		!inserted &&
+		userEvents.length > 0 &&
+		userEvents.every((value) =>
+			value === "input.type" ||
+			value.startsWith("input.type.") ||
+			value === "delete" ||
+			value.startsWith("delete."),
+		)
+	) {
+		return "deleting";
+	}
+	return "command";
+}
+
 export interface BoardspaceDocumentHistoryEditor {
 	markHistoryStoppingPoint(name: string): string;
 	undo(): unknown;

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
 	BoardspaceDocumentHistory,
+	classifyBoardspaceTextChange,
 	type BoardspaceDocumentHistoryEditor,
 	type BoardspaceHistoryScheduler,
 } from "../src/tldraw/boardspace-document-history";
@@ -34,6 +35,14 @@ function createHarness() {
 	};
 	return { events, history, elapsePause };
 }
+
+test("classifies CodeMirror typing and deletion events for grouping", () => {
+	assert.equal(classifyBoardspaceTextChange(["input.type"], true, false), "typing");
+	assert.equal(classifyBoardspaceTextChange(["input.type"], false, true), "deleting");
+	assert.equal(classifyBoardspaceTextChange(["delete.backward"], false, true), "deleting");
+	assert.equal(classifyBoardspaceTextChange(["delete.forward"], false, true), "deleting");
+	assert.equal(classifyBoardspaceTextChange(["input.paste"], true, false), "command");
+});
 
 test("adjacent Markdown typing coalesces until an idle pause", () => {
 	const { events, history, elapsePause } = createHarness();

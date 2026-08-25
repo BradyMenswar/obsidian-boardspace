@@ -1,14 +1,18 @@
-import { EditorState } from "@codemirror/state";
+import { EditorState, Transaction } from "@codemirror/state";
 import { EditorView, keymap, type ViewUpdate } from "@codemirror/view";
 import { Component, MarkdownRenderer } from "obsidian";
 import { useEffect, useRef } from "react";
 import { useApp } from "../hooks/use-app";
 import { useBoardspaceFilePath } from "../context/boardspace-file-context";
+import {
+	classifyBoardspaceTextChange,
+	type BoardspaceTextChangeKind,
+} from "./boardspace-document-history";
 
 interface BoardTextCardContentProps {
 	isEditing: boolean;
 	markdown: string;
-	onChange(markdown: string, kind: "typing" | "deleting" | "command"): void;
+	onChange(markdown: string, kind: BoardspaceTextChangeKind): void;
 	onHistoryBoundary(): void;
 	onKeyDown?: (event: KeyboardEvent) => void;
 	onRedo(): void;
@@ -188,12 +192,7 @@ function CodeMirrorTextCardEditor({
 	);
 }
 
-function getTextChangeKind(
-	update: ViewUpdate,
-): "typing" | "deleting" | "command" {
-	const isTypedInput = update.transactions.every((transaction) =>
-		transaction.isUserEvent("input.type"),
-	);
+function getTextChangeKind(update: ViewUpdate): BoardspaceTextChangeKind {
 	let inserted = false;
 	let deleted = false;
 	update.changes.iterChanges((fromA, toA, _fromB, _toB, insertedText) => {
@@ -201,11 +200,11 @@ function getTextChangeKind(
 		deleted ||= toA > fromA;
 	});
 
-	if (isTypedInput && inserted && !deleted) {
-		return "typing";
-	}
-	if (isTypedInput && deleted && !inserted) {
-		return "deleting";
-	}
-	return "command";
+	return classifyBoardspaceTextChange(
+		update.transactions.map(
+			(transaction) => transaction.annotation(Transaction.userEvent) ?? "",
+		),
+		inserted,
+		deleted,
+	);
 }
