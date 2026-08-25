@@ -84,6 +84,21 @@ test("typing, deletion, different cards, and explicit commands create boundaries
 	]);
 });
 
+test("an immediate canvas command starts after the active text transaction", () => {
+	const { events, history } = createHarness();
+
+	history.recordTextChange("card-1", "typing", () => events.push("type"));
+	history.beforeCanvasCommand();
+	events.push("canvas");
+
+	assert.deepEqual(events, [
+		"mark:edit text card",
+		"type",
+		"mark:finish text card edit",
+		"canvas",
+	]);
+});
+
 test("undo and redo finish focused text edits before using document history", () => {
 	const { events, history } = createHarness();
 

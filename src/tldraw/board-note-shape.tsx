@@ -426,6 +426,7 @@ function BoardNoteShapeView({ shape }: { shape: BoardNoteShape }) {
 			}
 
 			event.preventDefault();
+			getBoardspaceDocumentHistory(editor).beforeCanvasCommand();
 			removeBoardspaceMediaCaption(editor, parentMedia.id);
 		};
 	}, [editor, markdown, parentMedia, shape]);
