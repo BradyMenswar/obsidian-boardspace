@@ -563,9 +563,13 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): { cards: BoardspaceC
 	const assets = new Map<string, Record<string, unknown>>();
 	const bindings: Record<string, unknown>[] = [];
 	const pageIds: string[] = [];
+	const blockers: string[] = [];
 	let documentCount = 0;
 	for (const [recordId, record] of Object.entries(store)) {
-		if (!isRecord(record)) throw unsupportedRecord(recordId, "malformed");
+		if (!isRecord(record)) {
+			blockers.push(unsupportedRecord(recordId, "malformed").message);
+			continue;
+		}
 		if (record.typeName === "document") {
 			documentCount += 1;
 			continue;
@@ -583,7 +587,8 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): { cards: BoardspaceC
 			continue;
 		}
 		if (record.typeName !== "shape" || !["board-note", "board-todo", "board-table", "board-swatch", "board-link", "board-column", "image", "video", "arrow", "draw"].includes(String(record.type))) {
-			throw unsupportedRecord(recordId, typeof record.type === "string" ? record.type : String(record.typeName));
+			blockers.push(unsupportedRecord(recordId, typeof record.type === "string" ? record.type : String(record.typeName)).message);
+			continue;
 		}
 		shapes.set(recordId, record);
 	}
@@ -607,11 +612,12 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): { cards: BoardspaceC
 			if (copiedTargetId) binding.meta = { ...binding.meta as Record<string, unknown>, boardspaceArrowTargetItemId: copiedTargetId };
 		}
 		if (!from || from.type !== "arrow" || !isValidArrowBinding(binding) || !shapes.has(String(binding.toId))) {
-			throw new Error(`Unsupported or malformed arrow binding ${String(binding.id)} blocks the complete save.`);
+			blockers.push(`Unsupported or malformed arrow binding ${String(binding.id)} blocks the complete save.`);
 		}
 	}
 	if (documentCount !== 1 || pageIds.length !== 1) {
-		throw new Error("A Boardspace editor representation must contain one document and one editor page; the complete save was blocked.");
+		blockers.push("A Boardspace editor representation must contain one document and one editor page; the complete save was blocked.");
+		throw new Error(blockers.join("\n"));
 	}
 	const pageId = pageIds[0]!;
 	const rootShapes = Array.from(shapes.values()).filter((shape) => shape.parentId === pageId);
@@ -621,7 +627,9 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): { cards: BoardspaceC
 		const isCaption = shape.type === "board-note" && isRecord(shape.meta) && shape.meta[MEDIA_CAPTION_META_KEY] === true && shapes.has(String(shape.parentId));
 		const isColumnCard = typeof shape.parentId === "string" && columnIds.has(shape.parentId) && shape.type !== "board-column" && shape.type !== "arrow" && shape.type !== "draw";
 		const isNestedArrow = shape.type === "arrow" && typeof shape.parentId === "string" && columnIds.has(shape.parentId);
-		if (!isCaption && !isColumnCard && !isNestedArrow) throw unsupportedRecord(id, String(shape.type));
+		if (!isCaption && !isColumnCard && !isNestedArrow) {
+			blockers.push(unsupportedRecord(id, String(shape.type)).message);
+		}
 	}
 
 	const readCard = (shape: Record<string, unknown>, placement: BoardspaceCardPlacement) => {
@@ -636,30 +644,53 @@ function readCardsFromSnapshot(snapshot: TLEditorSnapshot): { cards: BoardspaceC
 	rootShapes.sort((a, b) => String(a.index).localeCompare(String(b.index)));
 	const items: BoardspaceCanvasItem[] = [];
 	rootShapes.forEach((shape, order) => {
-		if (shape.type === "draw") {
-			items.push(readFreehandStrokeShape(shape, order, pageId));
-			return;
+		try {
+			if (shape.type === "draw") {
+				items.push(readFreehandStrokeShape(shape, order, pageId));
+				return;
+			}
+			if (shape.type === "arrow") {
+				items.push(readArrowShape(shape, order, pageId, bindings, shapes));
+				return;
+			}
+			if (shape.type === "board-column") {
+				const column = readColumnShape(shape, order, pageId);
+				items.push(column);
+				Array.from(shapes.values())
+					.filter((child) => child.parentId === shape.id && child.type !== "arrow")
+					.sort((a, b) => String(a.index).localeCompare(String(b.index)))
+					.forEach((child, childOrder) => {
+						try {
+							items.push(readCard(child, { type: "column", columnId: column.id, order: childOrder }));
+						} catch (error) {
+							blockers.push(saveBlockerMessage(error));
+						}
+					});
+				return;
+			}
+			items.push(readCard(shape, { type: "root", order, position: { x: Number(shape.x), y: Number(shape.y) } }));
+		} catch (error) {
+			blockers.push(saveBlockerMessage(error));
 		}
-		if (shape.type === "arrow") {
-			items.push(readArrowShape(shape, order, pageId, bindings, shapes));
-			return;
-		}
-		if (shape.type === "board-column") {
-			const column = readColumnShape(shape, order, pageId);
-			items.push(column);
-			Array.from(shapes.values())
-				.filter((child) => child.parentId === shape.id && child.type !== "arrow")
-				.sort((a, b) => String(a.index).localeCompare(String(b.index)))
-				.forEach((child, childOrder) => items.push(readCard(child, { type: "column", columnId: column.id, order: childOrder })));
-			return;
-		}
-		items.push(readCard(shape, { type: "root", order, position: { x: Number(shape.x), y: Number(shape.y) } }));
 	});
 	const nestedArrows = Array.from(shapes.values())
 		.filter((shape) => shape.type === "arrow" && shape.parentId !== pageId)
 		.sort((a, b) => String(a.index).localeCompare(String(b.index)));
-	nestedArrows.forEach((shape, offset) => items.push(readArrowShape(shape, rootShapes.length + offset, pageId, bindings, shapes)));
+	nestedArrows.forEach((shape, offset) => {
+		try {
+			items.push(readArrowShape(shape, rootShapes.length + offset, pageId, bindings, shapes));
+		} catch (error) {
+			blockers.push(saveBlockerMessage(error));
+		}
+	});
+	if (blockers.length > 0) {
+		throw new Error(blockers.join("\n"));
+	}
 	return { cards: items, copiedItemIds };
+}
+
+function saveBlockerMessage(error: unknown) {
+	return error instanceof Error ? error.message : String(error);
 }
 
 function readColumnShape(shape: Record<string, unknown>, order: number, pageId: string): BoardspaceColumn {

@@ -6,8 +6,14 @@ import { createNewBoardspace } from "commands/create-new-boardspace";
 import { registerBoardspaceAutoOpen } from "workspace/auto-open-boardspace";
 
 export default class BoardspacePlugin extends Plugin {
+	private readonly boardViews = new Set<BoardView>();
+
 	async onload() {
-		this.registerView(BOARDSPACE_VIEW_TYPE, (leaf) => new BoardView(this, leaf));
+		this.registerView(BOARDSPACE_VIEW_TYPE, (leaf) => {
+			const view = new BoardView(this, leaf);
+			this.boardViews.add(view);
+			return view;
+		});
 		registerBoardspaceAutoOpen(this);
 
 		this.addCommand({
@@ -24,5 +30,15 @@ export default class BoardspacePlugin extends Plugin {
 				void createNewBoardspace(this.app);
 			},
 		});
+	}
+
+	unregisterBoardView(view: BoardView) {
+		this.boardViews.delete(view);
+	}
+
+	async onunload() {
+		await Promise.all(
+			Array.from(this.boardViews, (view) => view.flushPendingSave()),
+		);
 	}
 }

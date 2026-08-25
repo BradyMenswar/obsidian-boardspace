@@ -1260,6 +1260,28 @@ test("unsupported editor content blocks the complete text-card save", () => {
 	);
 });
 
+test("complete save validation identifies every unsupported editor record", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(populatedSource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	const store = snapshot.document.store as Record<string, unknown>;
+	store["shape:geo"] = { id: "shape:geo", typeName: "shape", type: "geo" };
+	store["shape:text"] = {
+		id: "shape:text",
+		typeName: "shape",
+		type: "board-note",
+		parentId: "page:page",
+	};
+
+	assert.throws(
+		() => adapter.serializeEditorState(createSnapshotEditorState(snapshot)),
+		(error: unknown) =>
+			error instanceof Error &&
+			error.message.includes("shape:geo (geo)") &&
+			error.message.includes("text-card editor record is malformed"),
+	);
+});
+
 test("extra editor pages block saving instead of being silently omitted", () => {
 	const adapter = createSchemaV2BoardspaceDocumentAdapter();
 	adapter.loadSource(emptySource);

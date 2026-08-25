@@ -8,7 +8,7 @@ import {
 	updateMediaAttachmentPath,
 } from "files/boardspace-document-adapter";
 import { BoardspaceDocumentLifecycle } from "files/boardspace-document-lifecycle";
-import { Menu, Notice, TextFileView, WorkspaceLeaf } from "obsidian";
+import { Menu, Notice, TextFileView, TFile, WorkspaceLeaf } from "obsidian";
 import { Root, createRoot } from "react-dom/client";
 import { BOARDSPACE_VIEW_TYPE } from "types/board";
 import { BoardspaceEditor } from "tldraw/boardspace-editor";
@@ -29,14 +29,34 @@ export class BoardView extends TextFileView {
 		this.plugin = plugin;
 		this.documentLifecycle = new BoardspaceDocumentLifecycle({
 			documentAdapter: createSchemaV2BoardspaceDocumentAdapter(),
-			requestSave: async () => this.save(false),
+			requestSave: async (source, expectedSource) => {
+				if (!this.file) {
+					throw new Error("The Boardspace file is no longer open.");
+				}
+
+				let externalSource: string | undefined;
+				await this.app.vault.process(this.file, (currentSource) => {
+					if (currentSource !== expectedSource && currentSource !== source) {
+						externalSource = currentSource;
+						return currentSource;
+					}
+					return source;
+				});
+				return externalSource === undefined
+					? { status: "saved" as const }
+					: { status: "conflict" as const, externalSource };
+			},
 			scheduler: {
 				schedule: (callback, delay) => window.setTimeout(callback, delay),
 				cancel: (handle) => window.clearTimeout(handle),
 			},
+			onConflict: () => {
+				this.renderView();
+			},
 			onSaveError: (error) => {
 				console.error("Boardspace failed to save.", error);
-				new Notice("Boardspace failed to save. Check the developer console for details.");
+				const details = error instanceof Error ? error.message : String(error);
+				new Notice(`Boardspace did not save: ${details}`);
 			},
 		});
 	}
@@ -54,7 +74,11 @@ export class BoardView extends TextFileView {
 	}
 
 	setViewData(data: string, clear: boolean) {
-		this.documentLifecycle.loadSource(data);
+		if (clear || !this.documentLifecycle.getLoadOutcome()) {
+			this.documentLifecycle.loadSource(data);
+		} else {
+			this.documentLifecycle.receiveExternalSource(data);
+		}
 		this.renderVersion += 1;
 
 		this.renderView();
@@ -110,6 +134,9 @@ export class BoardView extends TextFileView {
 				}
 
 				this.isLeafActive = nextIsActive;
+				if (!nextIsActive) {
+					void this.documentLifecycle.flushPendingSave();
+				}
 				this.renderView();
 			}),
 		);
@@ -128,6 +155,11 @@ export class BoardView extends TextFileView {
 		this.renderView();
 	}
 
+	async onUnloadFile(file: TFile) {
+		await this.documentLifecycle.flushPendingSave();
+		await super.onUnloadFile(file);
+	}
+
 	async onClose() {
 		await this.documentLifecycle.flushPendingSave();
 		this.contentEl.removeClass("boardspace-view");
@@ -136,6 +168,7 @@ export class BoardView extends TextFileView {
 		this.root = null;
 		this.reactHost?.remove();
 		this.reactHost = null;
+		this.plugin.unregisterBoardView(this);
 	}
 
 	private renderView() {
@@ -144,9 +177,23 @@ export class BoardView extends TextFileView {
 		}
 
 		const loadOutcome = this.documentLifecycle.getLoadOutcome();
+		const conflict = this.documentLifecycle.getConflict();
 		this.root.render(
 			<AppContext.Provider value={this.app}>
-				{loadOutcome?.status === "read-only" ? (
+				{conflict ? (
+					<div style={{ maxWidth: "640px", padding: "24px" }}>
+						<h2>This board changed outside Boardspace</h2>
+						<p>Choose which version to keep. Neither version will be overwritten until you choose.</p>
+						<div style={{ display: "flex", gap: "8px" }}>
+							<button type="button" onClick={() => this.resolveConflict("local")}>
+								Keep local changes
+							</button>
+							<button type="button" onClick={() => this.resolveConflict("external")}>
+								Load external changes
+							</button>
+						</div>
+					</div>
+				) : loadOutcome?.status === "read-only" ? (
 					<div style={{ maxWidth: "640px", padding: "24px" }}>
 						<h2>Boardspace could not open this file</h2>
 						<ul>
@@ -165,12 +212,27 @@ export class BoardView extends TextFileView {
 						file={this.file}
 						isActive={this.isLeafActive}
 						loadKey={`${this.file?.path ?? "boardspace"}:${this.renderVersion}`}
+						onBlur={() => void this.documentLifecycle.flushPendingSave()}
 						onSnapshotChange={this.handleSnapshotChange}
 						snapshot={loadOutcome?.editorState}
 					/>
 				)}
 			</AppContext.Provider>,
 		);
+	}
+
+	async flushPendingSave() {
+		await this.documentLifecycle.flushPendingSave();
+	}
+
+	private resolveConflict(choice: "local" | "external") {
+		const outcome = this.documentLifecycle.resolveConflict(choice);
+		if (outcome.status === "no-conflict") {
+			return;
+		}
+
+		this.renderVersion += 1;
+		this.renderView();
 	}
 
 	private readonly handleSnapshotChange = (state: BoardspaceEditorState) => {

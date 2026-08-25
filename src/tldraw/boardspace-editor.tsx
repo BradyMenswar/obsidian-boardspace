@@ -156,6 +156,7 @@ interface BoardspaceEditorProps {
 	file: TFile | null;
 	isActive: boolean;
 	loadKey: string;
+	onBlur?: () => void;
 	onSnapshotChange?: (state: BoardspaceEditorState) => void;
 	snapshot?: BoardspaceEditorState;
 }
@@ -257,6 +258,7 @@ export function BoardspaceEditor({
 	file,
 	isActive,
 	loadKey,
+	onBlur,
 	onSnapshotChange,
 	snapshot,
 }: BoardspaceEditorProps) {
@@ -266,6 +268,7 @@ export function BoardspaceEditor({
 				file={file}
 				isActive={isActive}
 				loadKey={loadKey}
+				onBlur={onBlur}
 				onSnapshotChange={onSnapshotChange}
 				snapshot={snapshot}
 			/>
@@ -277,6 +280,7 @@ function BoardspaceEditorInner({
 	file,
 	isActive,
 	loadKey,
+	onBlur,
 	onSnapshotChange,
 	snapshot,
 }: BoardspaceEditorProps) {
@@ -354,6 +358,12 @@ function BoardspaceEditorInner({
 			className="boardspace-editor"
 			data-board-file={file?.path ?? ""}
 			data-canvas-tone={currentTone}
+			onBlurCapture={(event) => {
+				const nextTarget = event.relatedTarget;
+				if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+					onBlur?.();
+				}
+			}}
 			onKeyDownCapture={(event) => {
 				const target = event.target;
 				if (
