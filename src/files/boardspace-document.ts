@@ -41,18 +41,26 @@ export interface BoardspaceTextCardStyle {
 	topBarCustomColor: string;
 }
 
-interface BoardspaceRootCard {
-	id: string;
-	placement: {
+export type BoardspaceCardPlacement =
+	| {
 		type: "root";
 		order: number;
 		position: { x: number; y: number };
+	}
+	| {
+		type: "column";
+		columnId: string;
+		order: number;
 	};
+
+interface BoardspaceCardBase {
+	id: string;
+	placement: BoardspaceCardPlacement;
 	preferredSize: { width: number; height: number };
 	style: BoardspaceTextCardStyle;
 }
 
-export interface BoardspaceTextCard extends BoardspaceRootCard {
+export interface BoardspaceTextCard extends BoardspaceCardBase {
 	kind: "text";
 	markdown: string;
 }
@@ -63,7 +71,7 @@ export interface BoardspaceTodoTask {
 	checked: boolean;
 }
 
-export interface BoardspaceTodoCard extends BoardspaceRootCard {
+export interface BoardspaceTodoCard extends BoardspaceCardBase {
 	kind: "todo";
 	title: string;
 	tasks: BoardspaceTodoTask[];
@@ -84,7 +92,7 @@ export interface BoardspaceTableRow {
 	cells: BoardspaceTableCell[];
 }
 
-export interface BoardspaceTableCard extends BoardspaceRootCard {
+export interface BoardspaceTableCard extends BoardspaceCardBase {
 	kind: "table";
 	title: string;
 	columns: BoardspaceTableColumn[];
@@ -98,11 +106,7 @@ export interface BoardspaceColorSwatchCard {
 	kind: "color-swatch";
 	color: string;
 	label: BoardspaceColorSwatchLabel;
-	placement: {
-		type: "root";
-		order: number;
-		position: { x: number; y: number };
-	};
+	placement: BoardspaceCardPlacement;
 	preferredSize: { width: number; height: number };
 	style: { opacity: number };
 }
@@ -125,25 +129,36 @@ export interface BoardspaceMediaCard {
 	attachmentPath: string;
 	caption?: string;
 	metadata: BoardspaceMediaMetadata;
-	placement: {
-		type: "root";
-		order: number;
-		position: { x: number; y: number };
-	};
+	placement: BoardspaceCardPlacement;
 	preferredSize: { width: number; height: number };
 	style: { opacity: number };
 }
 
 export type BoardspaceBoardLinkIcon = "board" | "bookmark" | "folder" | "lightbulb" | "layers" | "sparkle";
 
-export interface BoardspaceBoardLinkCard extends BoardspaceRootCard {
+export interface BoardspaceBoardLinkCard extends BoardspaceCardBase {
 	kind: "board-link";
 	targetPath: string;
 	title: string;
 	icon: BoardspaceBoardLinkIcon;
 }
 
-export type BoardspaceCanvasItem = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard | BoardspaceBoardLinkCard;
+export interface BoardspaceColumn {
+	id: string;
+	kind: "column";
+	title: string;
+	collapsed: boolean;
+	placement: {
+		type: "root";
+		order: number;
+		position: { x: number; y: number };
+	};
+	width: number;
+	style: BoardspaceTextCardStyle;
+}
+
+export type BoardspaceCard = BoardspaceTextCard | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard | BoardspaceBoardLinkCard;
+export type BoardspaceCanvasItem = BoardspaceCard | BoardspaceColumn;
 
 export interface BoardspaceDocumentV2 {
 	schemaVersion: typeof BOARDSPACE_SCHEMA_VERSION;
@@ -175,6 +190,8 @@ export interface BoardspaceDocumentDiagnostic {
 		| "table-nested-identity-duplicate"
 		| "table-cell-reference-invalid"
 		| "table-dimensions-invalid"
+		| "column-placement-invalid"
+		| "placement-order-invalid"
 		| "markdown-block-identity-duplicate"
 		| "markdown-footnote-definition-duplicate"
 		| "index-projection-malformed";
@@ -367,7 +384,7 @@ function validateStructuredData(
 		if (!KNOWN_ITEM_KINDS.has(item.kind)) {
 			return invalid("unknown-item-kind", `Unknown Boardspace canvas item kind: ${item.kind}.`);
 		}
-		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch" && item.kind !== "media" && item.kind !== "board-link") {
+		if (item.kind !== "text" && item.kind !== "todo" && item.kind !== "table" && item.kind !== "color-swatch" && item.kind !== "media" && item.kind !== "board-link" && item.kind !== "column") {
 			return invalid("canvas-content-not-supported", `Boardspace canvas item kind ${item.kind} is not supported yet.`);
 		}
 	}
@@ -376,6 +393,13 @@ function validateStructuredData(
 	const taskIds = new Set<string>();
 	const tableNestedIds = new Set<string>();
 	for (const [key, rawItem] of entries) {
+		if (isRecord(rawItem) && rawItem.kind === "column") {
+			if (!isColumnData(key, rawItem)) {
+				return invalidData(`Boardspace column ${key} is malformed.`);
+			}
+			items[key] = rawItem;
+			continue;
+		}
 		if (isRecord(rawItem) && rawItem.kind === "text") {
 			if (!isTextCardData(key, rawItem)) {
 				return invalidData(`Boardspace text card ${key} is malformed.`);
@@ -432,6 +456,9 @@ function validateStructuredData(
 		items[key] = rawItem;
 	}
 
+	const placementDiagnostic = validatePlacements(items);
+	if (placementDiagnostic) return { status: "invalid", diagnostic: placementDiagnostic };
+
 	for (const id of regions.keys()) {
 		if (items[id]?.kind !== "text") {
 			return invalid("text-card-region-orphan", `Markdown region ${id} has no text-card record.`);
@@ -457,7 +484,7 @@ function validateStructuredData(
 	return { status: "valid", items, textCardOrder: [...textCardOrder] };
 }
 
-function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | BoardspaceTodoCard | BoardspaceTableCard | BoardspaceColorSwatchCard | BoardspaceMediaCard | BoardspaceBoardLinkCard {
+function toStructuredCard(item: BoardspaceCanvasItem): Omit<BoardspaceTextCard, "markdown"> | Exclude<BoardspaceCanvasItem, BoardspaceTextCard> {
 	if (item.kind !== "text") return item;
 	return {
 		id: item.id,
@@ -489,17 +516,25 @@ function isTableCardData(key: string, value: unknown): value is BoardspaceTableC
 	return isRootCardData(value);
 }
 
+function isColumnData(key: string, value: unknown): value is BoardspaceColumn {
+	return isRecord(value) &&
+		hasOnlyKeys(value, ["id", "kind", "title", "collapsed", "placement", "width", "style"]) &&
+		value.id === key && value.kind === "column" && typeof value.title === "string" &&
+		typeof value.collapsed === "boolean" && isPositiveNumber(value.width) &&
+		isRootPlacement(value.placement) && isTextCardStyle(value.style);
+}
+
 function isColorSwatchCardData(key: string, value: unknown): value is BoardspaceColorSwatchCard {
 	if (!isRecord(value) || !hasOnlyKeys(value, ["id", "kind", "color", "label", "placement", "preferredSize", "style"])) return false;
 	if (value.id !== key || value.kind !== "color-swatch" || !isHexColor(value.color) || typeof value.label !== "string" || !SWATCH_LABELS.has(value.label)) return false;
-	if (!isRootPlacementAndPreferredSize(value) || !isRecord(value.style) || !hasOnlyKeys(value.style, ["opacity"])) return false;
+	if (!isCardPlacementAndPreferredSize(value) || !isRecord(value.style) || !hasOnlyKeys(value.style, ["opacity"])) return false;
 	return isFiniteNumber(value.style.opacity) && value.style.opacity >= 0 && value.style.opacity <= 1;
 }
 
 function isMediaCardData(key: string, value: unknown): value is BoardspaceMediaCard {
 	if (!isRecord(value) || !hasOnlyOptionalKeys(value, ["id", "kind", "attachmentPath", "caption", "metadata", "placement", "preferredSize", "style"], ["caption"])) return false;
 	if (value.id !== key || value.kind !== "media" || !isVaultPath(value.attachmentPath) || (value.caption !== undefined && typeof value.caption !== "string")) return false;
-	if (!isRootPlacementAndPreferredSize(value) || !isRecord(value.style) || !hasOnlyKeys(value.style, ["opacity"]) || !isOpacity(value.style.opacity)) return false;
+	if (!isCardPlacementAndPreferredSize(value) || !isRecord(value.style) || !hasOnlyKeys(value.style, ["opacity"]) || !isOpacity(value.style.opacity)) return false;
 	if (!isRecord(value.metadata) || !hasOnlyOptionalKeys(value.metadata, ["type", "name", "mimeType", "width", "height", "isAnimated", "fileSize", "pixelRatio", "altText"], ["fileSize", "pixelRatio"])) return false;
 	const metadata = value.metadata;
 	return (metadata.type === "image" || metadata.type === "video") &&
@@ -580,25 +615,52 @@ function validateTableCard(
 }
 
 function isRootCardData(value: Record<string, unknown>) {
-	if (!isRootPlacementAndPreferredSize(value) || !isRecord(value.style)) return false;
-	const style = value.style;
-	return hasOnlyKeys(style, ["color", "customColor", "dash", "fill", "opacity", "size", "topBarColor", "topBarCustomColor"]) &&
-		typeof style.color === "string" && COLORS.has(style.color) && typeof style.customColor === "string" &&
-		typeof style.dash === "string" && DASHES.has(style.dash) && typeof style.fill === "string" && FILLS.has(style.fill) &&
-		isFiniteNumber(style.opacity) && style.opacity >= 0 && style.opacity <= 1 &&
-		typeof style.size === "string" && SIZES.has(style.size) && typeof style.topBarColor === "string" && TOP_BAR_COLORS.has(style.topBarColor) &&
-		typeof style.topBarCustomColor === "string";
+	return isCardPlacementAndPreferredSize(value) && isTextCardStyle(value.style);
 }
 
-function isRootPlacementAndPreferredSize(value: Record<string, unknown>) {
-	if (!isRecord(value.placement) || !isRecord(value.preferredSize)) return false;
-	const placement = value.placement;
-	const preferredSize = value.preferredSize;
-	return hasOnlyKeys(placement, ["type", "order", "position"]) &&
-		placement.type === "root" && isNonNegativeInteger(placement.order) &&
-		isRecord(placement.position) && hasOnlyKeys(placement.position, ["x", "y"]) &&
-		isFiniteNumber(placement.position.x) && isFiniteNumber(placement.position.y) &&
-		hasOnlyKeys(preferredSize, ["width", "height"]) && isPositiveNumber(preferredSize.width) && isPositiveNumber(preferredSize.height);
+function isTextCardStyle(value: unknown): value is BoardspaceTextCardStyle {
+	if (!isRecord(value)) return false;
+	return hasOnlyKeys(value, ["color", "customColor", "dash", "fill", "opacity", "size", "topBarColor", "topBarCustomColor"]) &&
+		typeof value.color === "string" && COLORS.has(value.color) && typeof value.customColor === "string" &&
+		typeof value.dash === "string" && DASHES.has(value.dash) && typeof value.fill === "string" && FILLS.has(value.fill) &&
+		isOpacity(value.opacity) && typeof value.size === "string" && SIZES.has(value.size) &&
+		typeof value.topBarColor === "string" && TOP_BAR_COLORS.has(value.topBarColor) && typeof value.topBarCustomColor === "string";
+}
+
+function isCardPlacementAndPreferredSize(value: Record<string, unknown>) {
+	if (!isRecord(value.preferredSize)) return false;
+	return isCardPlacement(value.placement) && hasOnlyKeys(value.preferredSize, ["width", "height"]) &&
+		isPositiveNumber(value.preferredSize.width) && isPositiveNumber(value.preferredSize.height);
+}
+
+function isCardPlacement(value: unknown): value is BoardspaceCardPlacement {
+	return isRootPlacement(value) || isRecord(value) && hasOnlyKeys(value, ["type", "columnId", "order"]) &&
+		value.type === "column" && typeof value.columnId === "string" && value.columnId.length > 0 && isNonNegativeInteger(value.order);
+}
+
+function isRootPlacement(value: unknown): value is Extract<BoardspaceCardPlacement, { type: "root" }> {
+	return isRecord(value) && hasOnlyKeys(value, ["type", "order", "position"]) &&
+		value.type === "root" && isNonNegativeInteger(value.order) && isRecord(value.position) &&
+		hasOnlyKeys(value.position, ["x", "y"]) && isFiniteNumber(value.position.x) && isFiniteNumber(value.position.y);
+}
+
+function validatePlacements(items: Record<string, BoardspaceCanvasItem>): BoardspaceDocumentDiagnostic | undefined {
+	const ordersByParent = new Map<string, number[]>();
+	for (const item of Object.values(items)) {
+		const parent = item.placement.type === "root" ? "root" : item.placement.columnId;
+		if (item.placement.type === "column" && items[item.placement.columnId]?.kind !== "column") {
+			return { code: "column-placement-invalid", message: `Card ${item.id} references missing column ${item.placement.columnId}.` };
+		}
+		const orders = ordersByParent.get(parent) ?? [];
+		orders.push(item.placement.order);
+		ordersByParent.set(parent, orders);
+	}
+	for (const [parent, orders] of ordersByParent) {
+		if (new Set(orders).size !== orders.length) {
+			return { code: "placement-order-invalid", message: `Canvas items under ${parent} must have one total order without ties.` };
+		}
+	}
+	return undefined;
 }
 
 function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>) {
@@ -606,6 +668,9 @@ function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>
 	const tableNestedIds = new Set<string>();
 	for (const item of Object.values(items)) {
 		const itemId = item.id;
+		if (item.kind === "column" && !isColumnData(itemId, item)) {
+			throw new Error(`Column ${itemId} is malformed; the complete save was blocked.`);
+		}
 		if (item.kind === "color-swatch" && !isColorSwatchCardData(itemId, item)) {
 			throw new Error(`Color swatch ${itemId} has an invalid color, label, placement, preferred size, or visual style; the complete save was blocked.`);
 		}
@@ -631,6 +696,8 @@ function assertValidNestedIdentities(items: Record<string, BoardspaceCanvasItem>
 			if (diagnostic) throw new Error(`${diagnostic.message} The complete save was blocked.`);
 		}
 	}
+	const placementDiagnostic = validatePlacements(items);
+	if (placementDiagnostic) throw new Error(`${placementDiagnostic.message} The complete save was blocked.`);
 }
 
 function parseReservedFrontmatter(rawFrontmatter: string):

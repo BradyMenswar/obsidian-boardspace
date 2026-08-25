@@ -9,7 +9,6 @@ import {
 	getIndexAbove,
 } from "tldraw";
 import {
-	BOARD_COLUMN_BODY_GAP,
 	BOARD_COLUMN_CHILD_GAP,
 	BOARD_COLUMN_MIN_HEIGHT,
 	BOARD_COLUMN_PADDING,
@@ -23,6 +22,7 @@ import {
 } from "./board-link-shape";
 import { BoardNoteShape, getBoardNoteMeasuredHeight } from "./board-note-shape";
 import { BoardSwatchShape } from "./board-swatch-shape";
+import { BoardTableShape } from "./board-table-shape";
 import { BoardTodoShape, getBoardTodoMeasuredHeight } from "./board-todo-shape";
 import {
 	BoardspaceMediaShape,
@@ -32,24 +32,11 @@ import {
 	isBoardspaceMediaCaptionShape,
 	isBoardspaceMediaShape,
 } from "./boardspace-media-caption";
-const COLUMN_ALLOWED_SHAPE_TYPES = new Set<TLShape["type"]>([
-	"board-note",
-	"board-link",
-	"board-swatch",
-	"board-todo",
-	"image",
-	"video",
-]);
+import { isColumnAllowedShape } from "./board-column-card-kinds";
+
+export { isColumnAllowedShape, isColumnAllowedShapeType } from "./board-column-card-kinds";
 
 type BoardColumnCounterKind = "board" | "card";
-
-export function isColumnAllowedShapeType(type: TLShape["type"]) {
-	return COLUMN_ALLOWED_SHAPE_TYPES.has(type);
-}
-
-export function isColumnAllowedShape(shape: TLShape) {
-	return isColumnAllowedShapeType(shape.type);
-}
 
 export function getBoardColumnChildKinds(shapes: TLShape[]) {
 	const counts: Record<BoardColumnCounterKind, number> = {
@@ -118,6 +105,13 @@ export function getBoardColumnLayoutResult(
 			updates.push(nextShape.update);
 			nextY += nextShape.height;
 			nextY += BOARD_COLUMN_CHILD_GAP;
+			continue;
+		}
+
+		if (shape.type === "board-table") {
+			const nextShape = getNormalizedBoardTableShape(shape, innerWidth, nextY);
+			updates.push(nextShape.update);
+			nextY += nextShape.height + BOARD_COLUMN_CHILD_GAP;
 			continue;
 		}
 
@@ -306,6 +300,7 @@ function getBoardColumnCounterKind(shape: TLShape): BoardColumnCounterKind | und
 	if (
 		shape.type === "board-note" ||
 		shape.type === "board-swatch" ||
+		shape.type === "board-table" ||
 		shape.type === "board-todo"
 	) {
 		return "card";
@@ -399,20 +394,32 @@ function getNormalizedBoardSwatchShape(
 	};
 }
 
+function getNormalizedBoardTableShape(
+	shape: BoardTableShape,
+	width: number,
+	y: number,
+): { height: number; update: TLShapePartial<BoardTableShape> } {
+	return {
+		height: shape.props.h,
+		update: { id: shape.id, type: shape.type, x: BOARD_COLUMN_PADDING, y, props: { h: shape.props.h, w: width } },
+	};
+}
+
 function isBoardColumnCardShape(
 	shape: TLShape,
-) : shape is BoardLinkShape | BoardNoteShape | BoardSwatchShape | BoardTodoShape | BoardspaceMediaShape {
+) : shape is BoardLinkShape | BoardNoteShape | BoardSwatchShape | BoardTableShape | BoardTodoShape | BoardspaceMediaShape {
 	return (
 		shape.type === "board-link" ||
 		shape.type === "board-note" ||
 		shape.type === "board-swatch" ||
+		shape.type === "board-table" ||
 		shape.type === "board-todo" ||
 		isBoardspaceMediaShape(shape)
 	);
 }
 
 function getBoardColumnCardHeight(
-	shape: BoardLinkShape | BoardNoteShape | BoardSwatchShape | BoardTodoShape | BoardspaceMediaShape,
+	shape: BoardLinkShape | BoardNoteShape | BoardSwatchShape | BoardTableShape | BoardTodoShape | BoardspaceMediaShape,
 	editor?: Editor,
 ) {
 	if (isBoardspaceMediaShape(shape)) {

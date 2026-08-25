@@ -3,6 +3,7 @@ import {
 	BoardspaceEditorState,
 	createSnapshotEditorState,
 } from "../files/boardspace-document-adapter";
+import { BOARDSPACE_PREFERRED_SIZE_META_KEY } from "../files/boardspace-editor-meta";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
 	BoardspaceFileProvider,
@@ -23,6 +24,8 @@ import {
 	getColorValue,
 	getDefaultColorTheme,
 	kickoutOccludedShapes,
+	getIndexAbove,
+	ZERO_INDEX_KEY,
 	StylePanelArrowheadPicker,
 	StylePanelArrowKindPicker,
 	StylePanelColorPicker,
@@ -65,7 +68,9 @@ import {
 	BoardColumnShape,
 	BoardColumnShapeUtil,
 } from "./board-column-shape";
+import { BOARD_COLUMN_DEFAULT_HEIGHT, BOARD_COLUMN_MIN_HEIGHT } from "./board-column-config";
 import { BoardColumnTool } from "./board-column-tool";
+import { registerBoardColumnPersistence } from "./board-column-persistence";
 import {
 	BoardLinkIconGlyph,
 	BoardLinkIconStyle,
@@ -287,6 +292,7 @@ function BoardspaceEditorInner({
 		const cleanupDoubleClick =
 			replaceCanvasDoubleClickWithBoardNote(editor);
 		const cleanupColumnLayout = registerBoardColumnAutoLayout(editor);
+		const cleanupColumnPersistence = registerBoardColumnPersistence(editor);
 		const cleanupTodoIdentities = registerBoardTodoIdentityNormalization(editor);
 		const cleanupTableIdentities = registerBoardTableIdentityNormalization(editor);
 		const cleanupMediaCaptions =
@@ -306,6 +312,7 @@ function BoardspaceEditorInner({
 			cleanupGestures?.();
 			cleanupDoubleClick?.();
 			cleanupColumnLayout?.();
+			cleanupColumnPersistence?.();
 			cleanupTodoIdentities?.();
 			cleanupTableIdentities?.();
 			cleanupMediaCaptions?.();
@@ -450,6 +457,48 @@ function createCanonicalCards(
 	});
 	if (assets.length > 0) editor.createAssets(assets);
 
+	const allCards = [
+		...state.textCards,
+		...state.todoCards,
+		...state.tableCards,
+		...state.swatchCards,
+		...state.mediaCards,
+		...state.boardLinkCards,
+	];
+	const columns = state.columns ?? [];
+	const rootIndices = createCanonicalOrderIndices([
+		...columns.map((column) => ({ id: column.id, order: column.order })),
+		...allCards.filter((card) => !card.columnId).map((card) => ({ id: card.id, order: card.order })),
+	]);
+	const columnIndices = new Map(columns.map((column) => [
+		column.id,
+		createCanonicalOrderIndices(allCards.filter((card) => card.columnId === column.id).map((card) => ({ id: card.id, order: card.order }))),
+	]));
+	if (columns.length > 0) {
+		editor.createShapes(columns.map((column) => ({
+			id: `shape:${column.id}` as BoardColumnShape["id"],
+			type: "board-column" as const,
+			index: rootIndices.get(column.id),
+			opacity: column.style.opacity,
+			x: column.position.x,
+			y: column.position.y,
+			props: {
+				collapsed: column.collapsed,
+				color: column.style.color as BoardColumnShape["props"]["color"],
+				customColor: column.style.customColor,
+				dash: column.style.dash as BoardColumnShape["props"]["dash"],
+				fill: column.style.fill as BoardColumnShape["props"]["fill"],
+				h: BOARD_COLUMN_DEFAULT_HEIGHT,
+				minH: BOARD_COLUMN_MIN_HEIGHT,
+				size: column.style.size as BoardColumnShape["props"]["size"],
+				title: column.title,
+				topBarColor: column.style.topBarColor as BoardColumnShape["props"]["topBarColor"],
+				topBarCustomColor: column.style.topBarCustomColor,
+				w: column.width,
+			},
+		})));
+	}
+
 	const cards = [
 		...state.textCards.map((card) => ({ kind: "text" as const, card })),
 		...state.todoCards.map((card) => ({ kind: "todo" as const, card })),
@@ -460,13 +509,19 @@ function createCanonicalCards(
 	].sort((a, b) => a.card.order - b.card.order);
 	editor.createShapes(
 		cards.map(({ kind, card }) => {
+			const placement = {
+				parentId: card.columnId ? `shape:${card.columnId}` : editor.getCurrentPageId(),
+				index: card.columnId ? columnIndices.get(card.columnId)?.get(card.id) : rootIndices.get(card.id),
+				x: card.columnId ? 0 : card.position.x,
+				y: card.columnId ? 0 : card.position.y,
+				...(card.columnId ? { meta: { [BOARDSPACE_PREFERRED_SIZE_META_KEY]: { ...card.preferredSize } } } : {}),
+			};
 			if (kind === "board-link") {
 				return {
 					id: `shape:${card.id}` as BoardLinkShape["id"],
 					type: "board-link" as const,
 					opacity: card.style.opacity,
-					x: card.position.x,
-					y: card.position.y,
+					...placement,
 					props: {
 						boardCount: 0,
 						cardCount: 0,
@@ -490,8 +545,7 @@ function createCanonicalCards(
 					id: `shape:${card.id}`,
 					type: card.metadata.type,
 					opacity: card.style.opacity,
-					x: card.position.x,
-					y: card.position.y,
+					...placement,
 					props: {
 						w: card.preferredSize.width,
 						h: card.preferredSize.height,
@@ -510,8 +564,7 @@ function createCanonicalCards(
 					id: `shape:${card.id}` as BoardSwatchShape["id"],
 					type: "board-swatch" as const,
 					opacity: card.style.opacity,
-					x: card.position.x,
-					y: card.position.y,
+					...placement,
 					props: {
 						colorValue: card.color,
 						h: card.preferredSize.height,
@@ -525,8 +578,7 @@ function createCanonicalCards(
 					id: `shape:${card.id}` as BoardTableShape["id"],
 					type: "board-table" as const,
 					opacity: card.style.opacity,
-					x: card.position.x,
-					y: card.position.y,
+					...placement,
 					props: {
 						color: card.style.color as BoardTableShape["props"]["color"],
 						columns: card.columns.map((column) => ({ ...column })),
@@ -548,8 +600,7 @@ function createCanonicalCards(
 					id: `shape:${card.id}` as BoardTodoShape["id"],
 					type: "board-todo" as const,
 					opacity: card.style.opacity,
-					x: card.position.x,
-					y: card.position.y,
+					...placement,
 					props: {
 						color: card.style.color as BoardTodoShape["props"]["color"],
 						customColor: card.style.customColor,
@@ -569,8 +620,7 @@ function createCanonicalCards(
 				id: `shape:${card.id}` as BoardNoteShape["id"],
 				type: "board-note" as const,
 				opacity: card.style.opacity,
-				x: card.position.x,
-				y: card.position.y,
+				...placement,
 				props: {
 					color: card.style.color as BoardNoteShape["props"]["color"],
 					customColor: card.style.customColor,
@@ -610,6 +660,16 @@ function createCanonicalCards(
 		},
 	}]);
 	if (captions.length > 0) editor.createShapes(captions);
+}
+
+function createCanonicalOrderIndices(items: Array<{ id: string; order: number }>) {
+	let index = ZERO_INDEX_KEY;
+	const indices = new Map<string, ReturnType<typeof getIndexAbove>>();
+	for (const item of [...items].sort((a, b) => a.order - b.order)) {
+		index = getIndexAbove(index);
+		indices.set(item.id, index);
+	}
+	return indices;
 }
 
 function normalizeToSinglePage(editor: Editor) {

@@ -285,7 +285,7 @@ test("round-trips media cards with owned plain-text captions and deterministic a
 		schemaVersion: 2,
 		frontmatterLines: [],
 		items: {
-			"media-2": { ...media, id: "media-2", attachmentPath: "Attachments/zeta.mp4", metadata: { ...media.metadata, type: "video", name: "zeta.mp4", mimeType: "video/mp4", pixelRatio: undefined } },
+			"media-2": { ...media, id: "media-2", attachmentPath: "Attachments/zeta.mp4", placement: { type: "root", order: 1, position: { x: 20, y: 140 } }, metadata: { ...media.metadata, type: "video", name: "zeta.mp4", mimeType: "video/mp4", pixelRatio: undefined } },
 			"media-1": media,
 			"media-copy": { ...media, id: "media-copy", placement: { type: "root", order: 3, position: { x: 600, y: 140 } } },
 		},

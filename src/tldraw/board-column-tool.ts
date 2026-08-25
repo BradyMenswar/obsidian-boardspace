@@ -3,6 +3,7 @@ import {
 	TLShape,
 	TLShapeId,
 } from "tldraw";
+import { isColumnAllowedShape } from "./board-column-layout";
 
 export class BoardColumnTool extends BaseBoxShapeTool {
 	static override id = "column";
@@ -59,7 +60,7 @@ export class BoardColumnTool extends BaseBoxShapeTool {
 }
 
 function canEnclose(shape: TLShape, ancestorIds: TLShapeId[], column: TLShape) {
-	if (ancestorIds.includes(shape.id)) {
+	if (!isColumnAllowedShape(shape) || ancestorIds.includes(shape.id)) {
 		return false;
 	}
 

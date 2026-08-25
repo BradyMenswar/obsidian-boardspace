@@ -10,6 +10,7 @@ import {
 } from "../src/files/boardspace-document-adapter";
 import {
 	BoardspaceBoardLinkCard,
+	BoardspaceColumn,
 	BoardspaceColorSwatchCard,
 	BoardspaceDocumentV2,
 	BoardspaceMediaCard,
@@ -48,6 +49,26 @@ const populatedDocument: BoardspaceDocumentV2 = {
 	},
 };
 const populatedSource = serializeBoardspaceDocument(populatedDocument);
+
+const columnDocument: BoardspaceDocumentV2 = {
+	...populatedDocument,
+	items: {
+		"column-1": {
+			id: "column-1",
+			kind: "column",
+			title: "Now",
+			collapsed: true,
+			placement: { type: "root", order: 0, position: { x: 20, y: 30 } },
+			width: 380,
+			style: { ...(populatedDocument.items["text-1"] as BoardspaceTextCard).style },
+		},
+		"text-1": {
+			...(populatedDocument.items["text-1"] as BoardspaceTextCard),
+			placement: { type: "column", columnId: "column-1", order: 0 },
+		},
+	},
+};
+const columnSource = serializeBoardspaceDocument(columnDocument);
 
 const todoDocument: BoardspaceDocumentV2 = {
 	schemaVersion: 2,
@@ -230,6 +251,108 @@ test("adapts an empty schema-v2 document without persisting editor-session state
 	const editorState = createSnapshotEditorState(emptyEditorSnapshot);
 	assert.equal(adapter.serializeEditorState(editorState), emptySource);
 	assert.doesNotMatch(adapter.serializeEditorState(editorState), /currentPageId|selectedShapeIds|isFocusMode/);
+});
+
+test("round-trips a column and derives contained-card geometry while retaining preferred size", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	const loaded = adapter.loadSource(columnSource);
+
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable" || loaded.editorState?.kind !== "canonical") return;
+	assert.deepEqual(loaded.editorState.columns, [{
+		id: "column-1",
+		title: "Now",
+		collapsed: true,
+		order: 0,
+		position: { x: 20, y: 30 },
+		width: 380,
+		style: (columnDocument.items["column-1"] as BoardspaceColumn).style,
+	}]);
+	assert.deepEqual(loaded.editorState.textCards[0], {
+		id: "text-1",
+		markdown: "# Heading\n\nRaw **Markdown**",
+		columnId: "column-1",
+		order: 0,
+		position: { x: 0, y: 0 },
+		preferredSize: { width: 320, height: 96 },
+		style: populatedDocument.items["text-1"]?.style,
+	});
+	assert.equal(adapter.serializeEditorState(loaded.editorState), columnSource);
+	assert.doesNotMatch(columnSource, /"position"[^}]*"columnId"|renderedWidth|measuredHeight|cardCount/);
+});
+
+test("persists a snapshot column without derived geometry and keeps a contained card's preferred size", () => {
+	const adapter = createSchemaV2BoardspaceDocumentAdapter();
+	adapter.loadSource(emptySource);
+	const snapshot = structuredClone(emptyEditorSnapshot) as unknown as BoardspaceSnapshot;
+	addSnapshotColumn(snapshot);
+	addSnapshotTextCard(snapshot, "text-1", "a1", "Inside", 10);
+	const textShape = (snapshot.document.store as Record<string, unknown>)["shape:text-1"] as Record<string, unknown>;
+	textShape.parentId = "shape:column-1";
+	textShape.x = 10;
+	textShape.y = 120;
+	const textProps = textShape.props as Record<string, unknown>;
+	textProps.w = 360;
+	textProps.h = 180;
+	textShape.meta = { boardspacePreferredSize: { width: 320, height: 96 } };
+
+	const saved = adapter.serializeEditorState(createSnapshotEditorState(snapshot));
+	const reopened = parseBoardspaceDocument(saved);
+	assert.equal(reopened.status, "editable");
+	if (reopened.status !== "editable") return;
+	assert.deepEqual(reopened.document.items["text-1"]?.placement, { type: "column", columnId: "column-1", order: 0 });
+	assert.deepEqual((reopened.document.items["text-1"] as BoardspaceTextCard).preferredSize, { width: 320, height: 96 });
+	assert.doesNotMatch(saved, /"h": 180|"w": 360|"minH"|measuredHeight|renderedWidth/);
+});
+
+test("allows every supported card kind in one total column order", () => {
+	const cards = [
+		columnDocument.items["text-1"] as BoardspaceTextCard,
+		todoDocument.items["todo-1"]!,
+		tableCard,
+		swatchCard,
+		mediaCard,
+		boardLinkCard,
+	].map((card, order) => ({ ...card, placement: { type: "column" as const, columnId: "column-1", order } }));
+	const document: BoardspaceDocumentV2 = {
+		...columnDocument,
+		items: {
+			"column-1": columnDocument.items["column-1"]!,
+			...Object.fromEntries(cards.map((card) => [card.id, card])),
+		},
+	};
+	const source = serializeBoardspaceDocument(document);
+	const loaded = createSchemaV2BoardspaceDocumentAdapter().loadSource(source);
+	assert.equal(loaded.status, "editable");
+	if (loaded.status !== "editable" || loaded.editorState?.kind !== "canonical") return;
+	assert.deepEqual([
+		...loaded.editorState.textCards,
+		...loaded.editorState.todoCards,
+		...loaded.editorState.tableCards,
+		...loaded.editorState.swatchCards,
+		...loaded.editorState.mediaCards,
+		...loaded.editorState.boardLinkCards,
+	].map((card) => card.columnId), Array(6).fill("column-1"));
+});
+
+test("rejects missing column parents and non-total sibling order", () => {
+	const missingParent = columnSource.replace('"columnId": "column-1"', '"columnId": "missing"');
+	const missingResult = parseBoardspaceDocument(missingParent);
+	assert.equal(missingResult.status, "read-only");
+	if (missingResult.status === "read-only") assert.equal(missingResult.diagnostics[0]?.code, "column-placement-invalid");
+
+	assert.throws(() => serializeBoardspaceDocument({
+		...columnDocument,
+		items: {
+			...columnDocument.items,
+			"text-2": {
+				...(columnDocument.items["text-1"] as BoardspaceTextCard),
+				id: "text-2",
+				markdown: "Second",
+			},
+		},
+		textCardOrder: ["text-1", "text-2"],
+	}), /total order without ties/);
 });
 
 test("round-trips one raw-Markdown text card through the complete editor representation", () => {
@@ -711,7 +834,8 @@ test("preserves multi-card source order and untouched Markdown when canvas order
 	if (reopened.status !== "editable") return;
 	assert.deepEqual(reopened.document.textCardOrder, ["text-2", "text-1"]);
 	assert.equal(reopened.document.items["text-1"]?.placement.order, 0);
-	assert.equal(reopened.document.items["text-1"]?.placement.position.x, 400);
+	const textOnePlacement = reopened.document.items["text-1"]?.placement;
+	assert.equal(textOnePlacement?.type === "root" ? textOnePlacement.position.x : undefined, 400);
 	const reopenedText2 = reopened.document.items["text-2"];
 	assert.equal(reopenedText2?.kind, "text");
 	assert.equal(reopenedText2?.kind === "text" ? reopenedText2.markdown : undefined, "Second card edited");
@@ -824,6 +948,18 @@ test("returns exact read-only diagnostics and preserves invalid source", () => {
 	});
 	assert.equal(adapter.serializeEditorState(undefined), source);
 });
+
+function addSnapshotColumn(snapshot: BoardspaceSnapshot) {
+	(snapshot.document.store as Record<string, unknown>)["shape:column-1"] = {
+		id: "shape:column-1", typeName: "shape", type: "board-column", parentId: "page:page", index: "a1",
+		opacity: 0.9, x: 20, y: 30,
+		props: {
+			collapsed: false, color: "blue", customColor: "#6b7280", dash: "solid", fill: "semi",
+			h: 420, minH: 180, size: "m", title: "Now", topBarColor: "transparent",
+			topBarCustomColor: "#6b7280", w: 380,
+		},
+	};
+}
 
 function addSnapshotBoardLink(
 	snapshot: BoardspaceSnapshot,
