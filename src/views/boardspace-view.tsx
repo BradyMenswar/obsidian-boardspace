@@ -77,7 +77,10 @@ export class BoardView extends TextFileView {
 		if (clear || !this.documentLifecycle.getLoadOutcome()) {
 			this.documentLifecycle.loadSource(data);
 		} else {
-			this.documentLifecycle.receiveExternalSource(data);
+			const outcome = this.documentLifecycle.receiveExternalSource(data);
+			if (outcome.status === "unchanged") {
+				return;
+			}
 		}
 		this.renderVersion += 1;
 

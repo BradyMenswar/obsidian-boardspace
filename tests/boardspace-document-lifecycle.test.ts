@@ -304,6 +304,30 @@ test("serializes overlapping save requests and never writes an older state after
 	assert.equal(lifecycle.isDirty(), false);
 });
 
+test("classifies vault echoes during and after a save as unchanged", async () => {
+	const scheduler = new ManualScheduler();
+	let echoedOutcome: ReturnType<BoardspaceDocumentLifecycle<{ text: string }>["receiveExternalSource"]> | undefined;
+	const lifecycle = new BoardspaceDocumentLifecycle({
+		documentAdapter: textAdapter,
+		requestSave: async (source) => {
+			echoedOutcome = lifecycle.receiveExternalSource(source);
+			return { status: "saved" };
+		},
+		scheduler,
+	});
+	lifecycle.loadSource("original");
+	lifecycle.updateEditorState({ text: "changed" });
+
+	await lifecycle.flushPendingSave();
+
+	assert.deepEqual(echoedOutcome, { status: "unchanged" });
+	assert.deepEqual(lifecycle.receiveExternalSource("changed"), {
+		status: "unchanged",
+	});
+	assert.deepEqual(lifecycle.getLoadOutcome()?.editorState, { text: "changed" });
+	assert.equal(lifecycle.isDirty(), false);
+});
+
 test("an external change discovered atomically during a save is not overwritten", async () => {
 	const scheduler = new ManualScheduler();
 	const writes: string[] = [];
