@@ -30,10 +30,8 @@ import {
 import { getUniqueBoardspacePath } from "commands/create-new-boardspace";
 import { activateBoardView } from "commands/util";
 import { useBoardspaceFilePath } from "context/boardspace-file-context";
-import { parseBoardspaceFile } from "files/boardspace-file";
 import {
 	createEmptyBoardspaceDocument,
-	parseBoardspaceDocument,
 	serializeBoardspaceDocument,
 } from "files/boardspace-document";
 import { isBoardspaceFile } from "files/boardspace-frontmatter";
@@ -58,8 +56,7 @@ import {
 import {
 	BoardLinkCounts,
 	formatBoardLinkCounts,
-	getBoardLinkCountsFromDocument,
-	getBoardLinkCountsFromSnapshot,
+	getBoardLinkCountsFromSource,
 } from "./board-link-counts";
 
 export type BoardLinkShape = Extract<TLShape, { type: "board-link" }>;
@@ -806,10 +803,7 @@ export async function refreshBoardLinkCounts(
 
 	try {
 		const contents = await app.vault.cachedRead(file);
-		const canonical = parseBoardspaceDocument(contents);
-		return canonical.status === "editable"
-			? getBoardLinkCountsFromDocument(canonical.document)
-			: getBoardLinkCountsFromSnapshot(parseBoardspaceFile(contents));
+		return getBoardLinkCountsFromSource(contents);
 	} catch (error) {
 		console.error("Boardspace failed to read linked board.", error);
 		return null;

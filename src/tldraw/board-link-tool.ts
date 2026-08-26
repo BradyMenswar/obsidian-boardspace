@@ -18,7 +18,6 @@ import {
 	BOARD_LINK_STANDALONE_HEIGHT,
 	BOARD_LINK_STANDALONE_WIDTH,
 	BoardLinkIconStyle,
-	BoardLinkShape,
 } from "./board-link-shape";
 
 export class BoardLinkTool extends StateNode {
@@ -108,6 +107,6 @@ export function createBoardLinkShapeAtPoint(
 
 	const nextShape = editor.getShape(id);
 	return nextShape && nextShape.type === "board-link"
-		? (nextShape as BoardLinkShape)
+		? nextShape
 		: undefined;
 }

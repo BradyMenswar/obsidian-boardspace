@@ -276,6 +276,10 @@ export function createEmptyBoardspaceDocument(
 	};
 }
 
+export function createEmptyBoardspaceSource() {
+	return serializeBoardspaceDocument(createEmptyBoardspaceDocument());
+}
+
 export function parseBoardspaceDocument(
 	source: string,
 ): BoardspaceDocumentParseResult {

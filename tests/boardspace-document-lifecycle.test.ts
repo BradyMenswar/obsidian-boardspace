@@ -4,28 +4,17 @@ import {
 	BoardspaceDocumentLifecycle,
 	BoardspaceDocumentScheduler,
 } from "../src/files/boardspace-document-lifecycle";
-import {
-	createLegacyBoardspaceDocumentAdapter,
-	serializeBoardspaceFile,
-} from "../src/files/boardspace-file";
-import { BoardspaceSnapshot } from "../src/types/board";
+import { createSchemaV2BoardspaceDocumentAdapter } from "../src/files/boardspace-document-adapter";
+import { createEmptyBoardspaceSource } from "../src/files/boardspace-document";
 
-const snapshot = {
-	document: {
-		store: {},
-		schema: {},
-	},
-	session: {
-		version: 0,
-		currentPageId: "page:page",
-		exportBackground: true,
-		isFocusMode: false,
-		isDebugMode: false,
-		isToolLocked: false,
-		isGridMode: true,
-		pageStates: [],
-	},
-} as unknown as BoardspaceSnapshot;
+const textAdapter = {
+	loadSource: (source: string) => ({
+		status: "editable" as const,
+		sourceStatus: "loaded" as const,
+		editorState: { text: source },
+	}),
+	serializeEditorState: (state: { text: string } | undefined) => state?.text ?? "",
+};
 
 class ManualScheduler implements BoardspaceDocumentScheduler {
 	private callback: (() => void) | undefined;
@@ -71,73 +60,54 @@ test("accepts substitutable document adaptation at the lifecycle seam", () => {
 	assert.equal(lifecycle.getViewData(), "ADAPT ME");
 });
 
-test("reports explicit outcomes for loaded, empty, invalid, and unsupported source", () => {
+test("opens schema v2 as editable and keeps schema v1 and invalid source read-only", () => {
 	const lifecycle = new BoardspaceDocumentLifecycle({
-		documentAdapter: createLegacyBoardspaceDocumentAdapter(),
+		documentAdapter: createSchemaV2BoardspaceDocumentAdapter(),
 		requestSave: async () => undefined,
 		scheduler: new ManualScheduler(),
 	});
+	const emptySource = createEmptyBoardspaceSource();
 
-	assert.deepEqual(lifecycle.loadSource(serializeBoardspaceFile(snapshot)), {
-		status: "editable",
-		sourceStatus: "loaded",
-		editorState: snapshot,
-	});
-	assert.deepEqual(lifecycle.loadSource(serializeBoardspaceFile(undefined)), {
+	assert.deepEqual(lifecycle.loadSource(emptySource), {
 		status: "editable",
 		sourceStatus: "empty",
 		editorState: undefined,
 	});
-	assert.deepEqual(
-		lifecycle.loadSource(`---\ntype: boardspace\nboard-version: 1\n---\n\n\`\`\`boardspace\n{bad json\n\`\`\``),
-		{
-			status: "editable",
-			sourceStatus: "invalid",
-			editorState: undefined,
-		},
-	);
-	assert.deepEqual(lifecycle.loadSource("# ordinary Markdown"), {
-		status: "read-only",
-		sourceStatus: "unsupported",
-		editorState: undefined,
-		diagnostics: [
-			{
-				code: "unsupported-legacy-source",
-				message: "This file is not a supported legacy Boardspace document.",
-			},
-		],
-	});
+	const legacySource = emptySource.replace("board-version: 2", "board-version: 1");
+	const legacyOutcome = lifecycle.loadSource(legacySource);
+	assert.equal(legacyOutcome.status, "read-only");
+	assert.equal(legacyOutcome.sourceStatus, "unsupported");
+	assert.equal(lifecycle.getViewData(), legacySource);
+
+	const invalidSource = "# ordinary Markdown";
+	const invalidOutcome = lifecycle.loadSource(invalidSource);
+	assert.equal(invalidOutcome.status, "read-only");
+	assert.equal(invalidOutcome.sourceStatus, "invalid");
+	assert.equal(lifecycle.getViewData(), invalidSource);
 });
 
 test("schedules and flushes an editable document save", async () => {
 	const scheduler = new ManualScheduler();
 	let saveCount = 0;
 	const lifecycle = new BoardspaceDocumentLifecycle({
-		documentAdapter: createLegacyBoardspaceDocumentAdapter(),
+		documentAdapter: textAdapter,
 		requestSave: async () => {
 			saveCount += 1;
 		},
 		scheduler,
 	});
-	lifecycle.loadSource(serializeBoardspaceFile(undefined));
+	lifecycle.loadSource("original");
 
-	assert.deepEqual(lifecycle.updateEditorState(snapshot), {
+	assert.deepEqual(lifecycle.updateEditorState({ text: "changed" }), {
 		status: "save-scheduled",
 	});
 	assert.deepEqual(lifecycle.getLoadOutcome(), {
 		status: "editable",
 		sourceStatus: "loaded",
-		editorState: snapshot,
+		editorState: { text: "changed" },
 	});
 	assert.equal(scheduler.lastDelay, 750);
-	assert.deepEqual(
-		createLegacyBoardspaceDocumentAdapter().loadSource(lifecycle.getViewData()),
-		{
-			status: "editable",
-			sourceStatus: "loaded",
-			editorState: snapshot,
-		},
-	);
+	assert.equal(lifecycle.getViewData(), "changed");
 
 	scheduler.runScheduledSave();
 	await lifecycle.flushPendingSave();
@@ -147,11 +117,11 @@ test("schedules and flushes an editable document save", async () => {
 });
 
 test("blocks edits and preserves source for read-only documents", async () => {
-	const source = "# ordinary Markdown\n";
+	const source = createEmptyBoardspaceSource().replace("board-version: 2", "board-version: 1");
 	const scheduler = new ManualScheduler();
 	let saveCount = 0;
 	const lifecycle = new BoardspaceDocumentLifecycle({
-		documentAdapter: createLegacyBoardspaceDocumentAdapter(),
+		documentAdapter: createSchemaV2BoardspaceDocumentAdapter(),
 		requestSave: async () => {
 			saveCount += 1;
 		},
@@ -159,9 +129,15 @@ test("blocks edits and preserves source for read-only documents", async () => {
 	});
 	lifecycle.loadSource(source);
 
-	assert.deepEqual(lifecycle.updateEditorState(snapshot), {
-		status: "save-blocked",
-	});
+	assert.deepEqual(lifecycle.updateEditorState({
+		kind: "canonical",
+		textCards: [],
+		todoCards: [],
+		tableCards: [],
+		swatchCards: [],
+		mediaCards: [],
+		boardLinkCards: [],
+	}), { status: "save-blocked" });
 	assert.equal(lifecycle.getViewData(), source);
 	assert.equal(lifecycle.isDirty(), false);
 	assert.equal(scheduler.lastDelay, undefined);
@@ -365,7 +341,7 @@ test("keeps failed saves dirty and reports the failure", async () => {
 	const failure = new Error("vault unavailable");
 	let reportedError: unknown;
 	const lifecycle = new BoardspaceDocumentLifecycle({
-		documentAdapter: createLegacyBoardspaceDocumentAdapter(),
+		documentAdapter: textAdapter,
 		requestSave: async () => {
 			throw failure;
 		},
@@ -374,8 +350,8 @@ test("keeps failed saves dirty and reports the failure", async () => {
 			reportedError = error;
 		},
 	});
-	lifecycle.loadSource(serializeBoardspaceFile(undefined));
-	lifecycle.updateEditorState(snapshot);
+	lifecycle.loadSource("original");
+	lifecycle.updateEditorState({ text: "changed" });
 
 	await lifecycle.flushPendingSave();
 

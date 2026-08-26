@@ -24,7 +24,7 @@ import {
 	parseBoardspaceDocument,
 	serializeBoardspaceDocument,
 } from "../src/files/boardspace-document";
-import type { BoardspaceSnapshot } from "../src/types/board";
+import type { TLEditorSnapshot as BoardspaceSnapshot } from "tldraw";
 
 const emptySource = serializeBoardspaceDocument(createEmptyBoardspaceDocument());
 
